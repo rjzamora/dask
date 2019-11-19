@@ -2101,3 +2101,28 @@ def test_split_row_groups_pyarrow(tmpdir):
         tmp, engine="pyarrow", gather_statistics=True, split_row_groups=False
     )
     assert ddf3.npartitions == 4
+
+
+@pytest.mark.parametrize("nfiles", [1, 2])
+@pytest.mark.parametrize("size", [50, 100])
+@pytest.mark.parametrize("chunk_size", [25, 5])
+def test_pyarrow_chunk_size(tmpdir, chunk_size, size, nfiles):
+    tmp = str(tmpdir)
+
+    df = pd.DataFrame(
+        {"a": np.random.randint(100, size=size), "b": np.random.randint(100, size=size)}
+    )
+    df.index.name = "index"
+    ddf1 = dd.from_pandas(df, npartitions=nfiles)
+
+    dd.to_parquet(ddf1, tmp, engine="pyarrow", row_group_size=chunk_size)
+    ddf2 = dd.read_parquet(
+        tmp,
+        index=df.index.name,
+        engine="pyarrow",
+        gather_statistics=True,
+        split_row_groups=True,
+    )
+
+    assert_eq(ddf1, ddf2)
+    assert ddf2.npartitions == int(size / chunk_size)
