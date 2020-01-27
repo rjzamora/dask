@@ -189,36 +189,11 @@ def set_partition(
 
     if np.isscalar(index):
         dtype = df[index].dtype
-    else:
-        dtype = index.dtype
 
-    if pd.isna(divisions).any() and pd.api.types.is_integer_dtype(dtype):
-        # Can't construct a Series[int64] when any / all of the divisions are NaN.
-        divisions = df._meta._constructor_sliced(divisions)
-    else:
-        divisions = df._meta._constructor_sliced(divisions, dtype=dtype)
-
-    if np.isscalar(index):
-        partitions = df[index].map_partitions(
-            set_partitions_pre, divisions=divisions, meta=meta
+        df3 = rearrange_by_divisions_v2(
+            df, column=index, divisions=divisions, max_branch=max_branch
         )
-        df2 = df.assign(_partitions=partitions)
-    else:
-        partitions = index.map_partitions(
-            set_partitions_pre, divisions=divisions, meta=meta
-        )
-        df2 = df.assign(_partitions=partitions, _index=index)
 
-    df3 = rearrange_by_column(
-        df2,
-        "_partitions",
-        max_branch=max_branch,
-        npartitions=len(divisions) - 1,
-        shuffle=shuffle,
-        compute=compute,
-    )
-
-    if np.isscalar(index):
         df4 = df3.map_partitions(
             set_index_post_scalar,
             index_name=index,
@@ -226,6 +201,28 @@ def set_partition(
             column_dtype=df.columns.dtype,
         )
     else:
+        dtype = index.dtype
+
+        if pd.isna(divisions).any() and pd.api.types.is_integer_dtype(dtype):
+            # Can't construct a Series[int64] when any / all of the divisions are NaN.
+            divisions = df._meta._constructor_sliced(divisions)
+        else:
+            divisions = df._meta._constructor_sliced(divisions, dtype=dtype)
+
+        partitions = index.map_partitions(
+            set_partitions_pre, divisions=divisions, meta=meta
+        )
+        df2 = df.assign(_partitions=partitions, _index=index)
+
+        df3 = rearrange_by_column(
+            df2,
+            "_partitions",
+            max_branch=max_branch,
+            npartitions=len(divisions) - 1,
+            shuffle=shuffle,
+            compute=compute,
+        )
+
         df4 = df3.map_partitions(
             set_index_post_series,
             index_name=index.name,
