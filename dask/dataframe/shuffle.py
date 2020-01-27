@@ -307,6 +307,17 @@ def shuffle_group_divs(df, divisions, col, stage, k, npartitions):
     return group_split_dispatch(df, c.astype(np.int64), k)
 
 
+def shuffle_group_divs_2(df, divisions, col):
+    if not len(df):
+        return {}, df
+    ind = set_partitions_pre(
+        df[col], divisions=df._constructor_sliced(divisions)
+    ).astype(np.int64)
+    n = ind.max() + 1
+    result2 = group_split_dispatch(df, ind.values.view(np.int64), n)
+    return result2, df.iloc[:0]
+
+
 def rearrange_by_divisions_v2(df, column: str, divisions: list, max_branch=None):
     """ Optimized shuffling without requiring explicit creation of
         a new "_partitions" column.
@@ -388,12 +399,17 @@ def rearrange_by_divisions_v2(df, column: str, divisions: list, max_branch=None)
     graph = HighLevelGraph.from_collections("shuffle-" + token, dsk, dependencies=[df])
     df2 = DataFrame(graph, "shuffle-" + token, df, df.divisions)
 
-    if npartitions is not None and npartitions != df.npartitions:
+    if npartitions != df.npartitions:
         parts = [i % df.npartitions for i in range(npartitions)]
         token = tokenize(df2, npartitions)
 
         dsk = {
-            ("repartition-group-" + token, i): (shuffle_group_2, k, column)
+            ("repartition-group-" + token, i): (
+                shuffle_group_divs_2,
+                k,
+                divisions,
+                column,
+            )
             for i, k in enumerate(df2.__dask_keys__())
         }
         for p in range(npartitions):
