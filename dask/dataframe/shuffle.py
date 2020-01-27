@@ -300,6 +300,128 @@ def rearrange_by_divisions(df, column, divisions, max_branch=None, shuffle=None)
     return df3
 
 
+def shuffle_group_divs(df, divisions, col, stage, k, npartitions):
+    ind = set_partitions_pre(df[col], divisions=df._constructor_sliced(divisions))
+
+    c = ind.values
+    typ = np.min_scalar_type(npartitions * 2)
+
+    c = np.mod(c, npartitions).astype(typ, copy=False)
+    np.floor_divide(c, k ** stage, out=c)
+    np.mod(c, k, out=c)
+
+    return group_split_dispatch(df, c.astype(np.int64), k)
+
+
+def rearrange_by_divisions_v2(df, column: str, divisions: list, max_branch=None):
+    """ Optimized shuffling without requiring explicit creation of
+        a new "_partitions" column.
+    """
+    npartitions = len(divisions) - 1
+    max_branch = max_branch or 32
+    n = df.npartitions
+
+    stages = int(math.ceil(math.log(n) / math.log(max_branch)))
+    if stages > 1:
+        k = int(math.ceil(n ** (1 / stages)))
+    else:
+        k = n
+
+    groups = []
+    splits = []
+    joins = []
+
+    inputs = [tuple(digit(i, j, k) for j in range(stages)) for i in range(k ** stages)]
+
+    token = tokenize(df, column, max_branch)
+
+    start = {
+        ("shuffle-join-" + token, 0, inp): (df._name, i)
+        if i < df.npartitions
+        else df._meta
+        for i, inp in enumerate(inputs)
+    }
+
+    for stage in range(1, stages + 1):
+        group = {  # Convert partition into dict of dataframe pieces
+            ("shuffle-group-divs-" + token, stage, inp): (
+                shuffle_group_divs,
+                ("shuffle-join-" + token, stage - 1, inp),
+                divisions,
+                column,
+                stage - 1,
+                k,
+                n,
+            )
+            for inp in inputs
+        }
+
+        split = {  # Get out each individual dataframe piece from the dicts
+            ("shuffle-split-" + token, stage, i, inp): (
+                getitem,
+                ("shuffle-group-divs-" + token, stage, inp),
+                i,
+            )
+            for i in range(k)
+            for inp in inputs
+        }
+
+        join = {  # concatenate those pieces together, with their friends
+            ("shuffle-join-" + token, stage, inp): (
+                _concat,
+                [
+                    (
+                        "shuffle-split-" + token,
+                        stage,
+                        inp[stage - 1],
+                        insert(inp, stage - 1, j),
+                    )
+                    for j in range(k)
+                ],
+            )
+            for inp in inputs
+        }
+        groups.append(group)
+        splits.append(split)
+        joins.append(join)
+
+    end = {
+        ("shuffle-" + token, i): ("shuffle-join-" + token, stages, inp)
+        for i, inp in enumerate(inputs)
+    }
+
+    dsk = toolz.merge(start, end, *(groups + splits + joins))
+    graph = HighLevelGraph.from_collections("shuffle-" + token, dsk, dependencies=[df])
+    df2 = DataFrame(graph, "shuffle-" + token, df, df.divisions)
+
+    if npartitions is not None and npartitions != df.npartitions:
+        parts = [i % df.npartitions for i in range(npartitions)]
+        token = tokenize(df2, npartitions)
+
+        dsk = {
+            ("repartition-group-" + token, i): (shuffle_group_2, k, column)
+            for i, k in enumerate(df2.__dask_keys__())
+        }
+        for p in range(npartitions):
+            dsk[("repartition-get-" + token, p)] = (
+                shuffle_group_get,
+                ("repartition-group-" + token, parts[p]),
+                p,
+            )
+
+        graph2 = HighLevelGraph.from_collections(
+            "repartition-get-" + token, dsk, dependencies=[df2]
+        )
+        df3 = DataFrame(
+            graph2, "repartition-get-" + token, df2, [None] * (npartitions + 1)
+        )
+    else:
+        df3 = df2
+        df3.divisions = (None,) * (df.npartitions + 1)
+
+    return df3
+
+
 def rearrange_by_column(
     df, col, npartitions=None, max_branch=None, shuffle=None, compute=None
 ):
