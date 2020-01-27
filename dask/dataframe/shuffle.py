@@ -182,18 +182,15 @@ def set_partition(
     shuffle
     partd
     """
-    meta = df._meta._constructor_sliced([0])
     if isinstance(divisions, tuple):
         # pd.isna considers tuples to be scalars. Convert to a list.
         divisions = list(divisions)
 
     if np.isscalar(index):
         dtype = df[index].dtype
-
         df3 = rearrange_by_divisions_v2(
             df, column=index, divisions=divisions, max_branch=max_branch
         )
-
         df4 = df3.map_partitions(
             set_index_post_scalar,
             index_name=index,
@@ -201,6 +198,7 @@ def set_partition(
             column_dtype=df.columns.dtype,
         )
     else:
+        meta = df._meta._constructor_sliced([0])
         dtype = index.dtype
 
         if pd.isna(divisions).any() and pd.api.types.is_integer_dtype(dtype):
@@ -298,9 +296,8 @@ def rearrange_by_divisions(df, column, divisions, max_branch=None, shuffle=None)
 
 
 def shuffle_group_divs(df, divisions, col, stage, k, npartitions):
-    ind = set_partitions_pre(df[col], divisions=df._constructor_sliced(divisions))
+    c = set_partitions_pre(df[col], divisions=df._constructor_sliced(divisions))
 
-    c = ind.values
     typ = np.min_scalar_type(npartitions * 2)
 
     c = np.mod(c, npartitions).astype(typ, copy=False)
@@ -789,7 +786,7 @@ def shuffle_group_3(df, col, npartitions, p):
 
 
 def set_index_post_scalar(df, index_name, drop, column_dtype):
-    df2 = df.drop("_partitions", axis=1).set_index(index_name, drop=drop)
+    df2 = df.set_index(index_name, drop=drop)
     df2.columns = df2.columns.astype(column_dtype)
     return df2
 
