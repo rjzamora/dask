@@ -1086,7 +1086,7 @@ def test_partition_on(tmpdir, engine):
     # Note #2: The index is not preserved in pyarrow when partition_on is used
     out = dd.read_parquet(
         tmpdir, engine=engine, index=False, gather_statistics=False
-    ).compute()
+    ).compute(scheduler="single-threaded")
     for val in df.a1.unique():
         assert set(df.b[df.a1 == val]) == set(out.b[out.a1 == val])
 
@@ -2538,8 +2538,10 @@ def test_partitioned_preserve_index(tmpdir, write_engine, read_engine):
             "B": pd.Categorical(b),
         }
     ).set_index("myindex")
+    data.index.name = None
     df1 = dd.from_pandas(data, npartitions=npartitions)
-    df1.to_parquet(tmp, partition_on="B", engine=write_engine)
+    fut = df1.to_parquet(tmp, partition_on="B", engine=write_engine, compute=False)
+    fut.compute(scheduler="single-threaded")
 
     expect = data[data["B"] == 1]
     got = dd.read_parquet(tmp, engine=read_engine, filters=[("B", "==", 1)])

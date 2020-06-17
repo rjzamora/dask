@@ -490,7 +490,7 @@ class FastParquetEngine(Engine):
             ignore_divisions = True
         fs.mkdirs(path, exist_ok=True)
         object_encoding = kwargs.pop("object_encoding", "utf8")
-        index_cols = kwargs.pop("index_cols", [])
+        index_cols = list(kwargs.pop("index_cols", []))
         if object_encoding == "infer" or (
             isinstance(object_encoding, dict) and "infer" in object_encoding.values()
         ):

@@ -202,7 +202,7 @@ def _determine_dataset_parts(fs, paths, gather_statistics, filters, dataset_kwar
     return parts, dataset
 
 
-def _write_partitioned(table, root_path, partition_cols, fs, index_cols=(), **kwargs):
+def _write_partitioned(table, root_path, partition_cols, fs, preserve_index, **kwargs):
     """ Write table to a partitioned dataset with pyarrow.
 
         Logic copied from pyarrow.parquet.
@@ -213,17 +213,22 @@ def _write_partitioned(table, root_path, partition_cols, fs, index_cols=(), **kw
     """
     fs.mkdirs(root_path, exist_ok=True)
 
-    df = table.to_pandas(ignore_metadata=True)
-    index_cols = list(index_cols) if index_cols else []
-    preserve_index = False
-    if index_cols and preserve_ind_supported:
-        df.set_index(index_cols, inplace=True)
-        preserve_index = True
+    # df = table.to_pandas(ignore_metadata=True)
+    preserve_index = preserve_index and preserve_ind_supported
+    df = table.to_pandas(ignore_metadata=not preserve_index)
+
+    # preserve_index = False
+    # index_cols = index_cols or []
+    # if index_cols and preserve_ind_supported:
+    #     df.set_index(list(index_cols), inplace=True)
+    #     preserve_index = True
+    #     if isinstance(index_cols, dict):
+    #         df.index.name = None
 
     partition_keys = [df[col] for col in partition_cols]
     data_df = df.drop(partition_cols, axis="columns")
     data_cols = df.columns.drop(partition_cols)
-    if len(data_cols) == 0 and not index_cols:
+    if len(data_cols) == 0 and not preserve_index:
         raise ValueError("No data left to save outside partition columns")
 
     subschema = table.schema
@@ -459,7 +464,10 @@ class ArrowEngine(Engine):
                 for i, name in enumerate(names):
                     if name not in skip_cols:
                         column = row_group.column(i)
-                        d = {"name": name}
+                        if name == "__index_level_0__":
+                            d = {"name": None}
+                        else:
+                            d = {"name": name}
                         if column.statistics:
                             cs_min = column.statistics.min
                             cs_max = column.statistics.max
@@ -538,6 +546,8 @@ class ArrowEngine(Engine):
             }
             for piece in parts
         ]
+        if index_cols == [None] and meta.index.name is None:
+            meta.index.name = [None]
 
         return (meta, stats, parts)
 
@@ -605,7 +615,12 @@ class ArrowEngine(Engine):
                 columns_and_parts = list(
                     set(columns_and_parts).difference(set(df.index.names))
                 )
-        df = df[list(columns_and_parts)]
+
+        # If the user asked for index=False, we may still
+        # have `None` in `columns_and_parts`
+        columns_and_parts = [c for c in list(columns_and_parts) if c is not None]
+
+        df = df[columns_and_parts]
 
         if index:
             df = df.set_index(index)
@@ -746,14 +761,17 @@ class ArrowEngine(Engine):
         _meta = None
         preserve_index = False
         if _index_in_schema(index_cols, schema):
-            df.set_index(index_cols, inplace=True)
+            df.set_index(list(index_cols), inplace=True)
+            if isinstance(index_cols, dict):
+                index_cols = list(index_cols.values())
+                df.index.name = None
             preserve_index = True
         else:
             index_cols = []
         t = pa.Table.from_pandas(df, preserve_index=preserve_index, schema=schema)
         if partition_on:
             md_list = _write_partitioned(
-                t, path, partition_on, fs, index_cols=index_cols, **kwargs
+                t, path, partition_on, fs, preserve_index, **kwargs
             )
             if md_list:
                 _meta = md_list[0]
