@@ -604,12 +604,22 @@ class BlockwiseIO(Blockwise):
         return self._cached_dict["dsk"]
 
     def __dask_distributed_pack__(self, client):
+        from distributed.worker import dumps_task
+
         ret = super().__dask_distributed_pack__(client)
-        ret["io_deps"] = self.io_deps
+        # ret["io_deps"] = self.io_deps
+        ret["io_deps"] = {}
+        for k, v in self.io_deps.items():
+            dsk = dict(v)
+            # dsk = {stringify(kt): stringify(vt) for kt, vt in dsk.items()}
+            dsk = toolz.valmap(dumps_task, dsk)
+            ret["io_deps"][k] = dsk
         return ret
 
     @classmethod
     def __dask_distributed_unpack__(cls, state, dsk, dependencies, annotations):
+        import pickle
+
         raw, raw_deps = make_blockwise_graph(
             state["func"],
             state["output"],
@@ -624,7 +634,11 @@ class BlockwiseIO(Blockwise):
             deserializing=True,
             func_future_args=state["func_future_args"],
         )
-        io_deps = state["io_deps"]
+        io_deps = {}
+        for k, v in state["io_deps"].items():
+            io_deps[k] = {kt: pickle.loads(vt) for kt, vt in v.items()}
+        print("IO_DEPS", io_deps)
+        print("raw", raw)
         global_dependencies = list(state["global_dependencies"])
 
         if io_deps:

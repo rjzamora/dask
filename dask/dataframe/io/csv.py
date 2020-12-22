@@ -112,6 +112,59 @@ class CSVSubgraph(Mapping):
         for i in range(len(self)):
             yield (self.name, i)
 
+    # def __dask_distributed_pack__(self, client):
+    #     from distributed.worker import dumps_function
+    #     from distributed.protocol.serialize import to_serialize
+
+    #     print("ADSGERQG-1")
+
+    #     ret = {
+    #         "name": self.name,
+    #         "reader": dumps_function(self.reader),
+    #         "blocks": tuple([dumps_function(b) for b in self.blocks]),
+    #         "is_first": self.is_first,
+    #         "head": to_serialize(self.head),
+    #         "header": self.header,
+    #         "kwargs": self.kwargs,
+    #         "dtypes": {k: to_serialize(v) for k, v in self.dtypes.items()},
+    #         "columns": self.columns,
+    #         "enforce": self.enforce,
+    #         "colname": self.colname,
+    #         "paths": self.paths,
+    #     }
+    #     print(self.blocks)
+    #     print("ADSGERQG-2")
+    #     print(ret)
+    #     return ret
+
+    # @classmethod
+    # def __dask_distributed_unpack__(cls, state, dsk, dependencies, annotations):
+    #     from distributed.worker import dumps_task
+
+    #     print("BDSGERQG", state)
+
+    #     # msgpack will convert lists into tuples, here
+    #     # we convert them back to lists
+    #     if isinstance(state["column"], tuple):
+    #         state["column"] = list(state["column"])
+    #     if "inputs" in state:
+    #         state["inputs"] = list(state["inputs"])
+
+    #     # Materialize the layer
+    #     raw = dict(cls(**state))
+
+    #     # Convert all keys to strings and dump tasks
+    #     raw = {stringify(k): stringify_collection_keys(v) for k, v in raw.items()}
+    #     dsk.update(toolz.valmap(dumps_task, raw))
+
+    #     # TODO: use shuffle-knowledge to calculate dependencies more efficiently
+    #     dependencies.update(
+    #         {k: keys_in_tasks(dsk, [v], as_list=True) for k, v in raw.items()}
+    #     )
+
+    #     if state["annotations"]:
+    #         annotations.update(cls.expand_annotations(state["annotations"], raw.keys()))
+
 
 class BlockwiseReadCSV(BlockwiseIO):
     """
@@ -137,6 +190,7 @@ class BlockwiseReadCSV(BlockwiseIO):
         self.name = name
         self.blocks = blocks
         self.io_name = "blockwise-io-" + name
+        self.columns = columns
         dsk_io = CSVSubgraph(
             self.io_name,
             reader,
