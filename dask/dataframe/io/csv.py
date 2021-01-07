@@ -28,6 +28,8 @@ from ...utils import asciitable, parse_bytes
 from ..utils import clear_known_categories
 from ...blockwise import BlockwiseIO
 
+# from ...highlevelgraph import Layer
+
 import fsspec.implementations.local
 from fsspec.compression import compr
 
@@ -112,6 +114,12 @@ class CSVSubgraph(Mapping):
         for i in range(len(self)):
             yield (self.name, i)
 
+    def is_materialized(self):
+        return False  # Never materialized
+
+    def get_dependencies(self, all_hlg_keys):
+        return {k: set() for k in self}
+
 
 class BlockwiseReadCSV(BlockwiseIO):
     """
@@ -137,6 +145,7 @@ class BlockwiseReadCSV(BlockwiseIO):
         self.name = name
         self.blocks = blocks
         self.io_name = "blockwise-io-" + name
+        self.columns = columns
         dsk_io = CSVSubgraph(
             self.io_name,
             reader,

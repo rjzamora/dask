@@ -27,6 +27,7 @@ class PackedFunctionCall:
     def __call__(self, args):
         if self.func is None:
             return None
+        print("~~~~ARGS", args)
         if isinstance(args, (tuple, list)):
             return self.func(*args)
         else:
@@ -268,6 +269,7 @@ class Blockwise(Layer):
                 concatenate=self.concatenate,
                 output_blocks=self.output_blocks,
                 dims=self.dims,
+                io_deps=self.io_deps,
             )
 
             self._cached_dict = {"dsk": dsk}
@@ -352,8 +354,8 @@ class Blockwise(Layer):
             "annotations": self.pack_annotations(),
             "output_blocks": self.output_blocks,
             "dims": self.dims,
+            "io_deps": self.io_deps,
         }
-
         return ret
 
     @classmethod
@@ -371,7 +373,9 @@ class Blockwise(Layer):
             return_key_deps=True,
             deserializing=True,
             func_future_args=state["func_future_args"],
+            # io_deps = state["io_deps"],
         )
+
         global_dependencies = list(state["global_dependencies"])
 
         if state["annotations"]:
@@ -572,42 +576,31 @@ class BlockwiseIO(Blockwise):
         # BlockwiseIO requires `io_deps` inputs
         self.io_deps = io_deps
 
-    @property
-    def _dict(self):
-        if hasattr(self, "_cached_dict"):
-            return self._cached_dict["dsk"]
-        else:
-            keys = tuple(map(blockwise_token, range(len(self.indices))))
-            dsk, _ = fuse(self.dsk, [self.output])
-            func = SubgraphCallable(dsk, self.output, keys)
-
-            dsk = make_blockwise_graph(
-                func,
-                self.output,
-                self.output_indices,
-                *list(toolz.concat(self.indices)),
-                new_axes=self.new_axes,
-                numblocks=self.numblocks,
-                concatenate=self.concatenate,
-                output_blocks=self.output_blocks,
-                dims=self.dims,
-            )
-
-            # Handle IO Subgraph
-            dsk = _inject_io_tasks(
-                dsk, self.io_deps, self.output_indices, self.new_axes
-            )
-
-            self._cached_dict = {"dsk": dsk}
-        return self._cached_dict["dsk"]
-
     def __dask_distributed_pack__(self, client):
+        from distributed.worker import warn_dumps  # , dumps_task, dumps_function
+
+        def _clean_dict(d):
+            return {k: (None, warn_dumps(tuple(v[1:]))) for k, v in dict(d).items()}
+
         ret = super().__dask_distributed_pack__(client)
-        ret["io_deps"] = self.io_deps
+        ret["io_deps"] = {k: _clean_dict(v) for k, v in self.io_deps.items()}
+
         return ret
 
     @classmethod
     def __dask_distributed_unpack__(cls, state, dsk, dependencies, annotations):
+        # from distributed.worker import _deserialize
+
+        # _io_deps = {}
+        # for k, v in state["io_deps"].items():
+        #     _dep = {}
+        #     for k2, v2 in v.items():
+        #         print("v2", v2)
+        #         print("v2.header", v2.header)
+        #         print("v2.frames", v2.frames)
+        #         _dep[k2] = _deserialize(v2)
+        #     _io_deps[k] = _dep
+
         raw, raw_deps = make_blockwise_graph(
             state["func"],
             state["output"],
@@ -621,15 +614,10 @@ class BlockwiseIO(Blockwise):
             return_key_deps=True,
             deserializing=True,
             func_future_args=state["func_future_args"],
+            io_deps=state["io_deps"],
+            # io_deps=_io_deps,
         )
-        io_deps = state["io_deps"]
         global_dependencies = list(state["global_dependencies"])
-
-        if io_deps:
-            # This is an IO layer.
-            raw = _inject_io_tasks(
-                raw, io_deps, state["output_indices"], state["new_axes"]
-            )
 
         if state["annotations"]:
             annotations.update(cls.expand_annotations(state["annotations"], raw.keys()))
@@ -654,28 +642,42 @@ class BlockwiseIO(Blockwise):
         )
 
 
-def _inject_io_tasks(dsk, io_deps, output_indices, new_axes):
+# def _inject_io_tasks(dsk, io_deps, output_indices, new_axes):
+#     # Loop through graph, and replace IO-placeholder tasks
+#     # with the actual underlying IO function
+#     for k in dsk:
+#         for i in range(1, len(dsk[k])):
+#             io_key = dsk[k][i]
+#             if isinstance(io_key, tuple) and len(io_key) and io_key[0] in io_deps:
+#                 io_subgraph = io_deps.get(io_key[0])
+#                 io_item = io_subgraph.get(io_key)
+#                 io_item = list(io_item[1:]) if len(io_item) > 1 else []
+#                 new_task = [io_item if j == i else v for j, v in enumerate(dsk[k])]
+#                 dsk[k] = tuple(new_task)
+
+#     return dsk
+
+
+def _inject_io_args(args, io_deps, stringify_keys=False):
     # Loop through graph, and replace IO-placeholder tasks
     # with the actual underlying IO function
-    for k in dsk:
-        for io_name, io_subgraph in io_deps.items():
-            # Leave out `new_axes` in key
-            io_key = (io_name,) + tuple(
-                [
-                    k[i + 1]
-                    for i, idx in enumerate(output_indices)
-                    if idx not in new_axes
-                ]
-            )
-            if io_key in dsk[k]:
-                # Inject IO-function arguments into the blockwise graph
-                # as a single (packed) tuple.
-                io_item = io_subgraph.get(io_key)
-                io_item = list(io_item[1:]) if len(io_item) > 1 else []
-                new_task = [io_item if v == io_key else v for v in dsk[k]]
-                dsk[k] = tuple(new_task)
 
-    return dsk
+    from distributed.worker import _deserialize
+
+    for k, arg in enumerate(args):
+        replaced = False
+        for io_dep in io_deps:
+            if io_dep and io_dep in arg:
+                args[k] = list(io_deps[io_dep][arg][1:])
+                if stringify_keys:
+                    args[k] = list(_deserialize(args[k][0])[0])
+                    print("^^^^^^args[k]", args[k], "\n")
+                replaced = True
+                break
+        if stringify_keys and not replaced:
+            args[k] = stringify_collection_keys(args[k])
+
+    return args
 
 
 def _get_coord_mapping(
@@ -889,6 +891,7 @@ def make_blockwise_graph(func, output, out_indices, *arrind_pairs, **kwargs):
     deserializing = kwargs.pop("deserializing", False)
     func_future_args = kwargs.pop("func_future_args", None)
     return_key_deps = kwargs.pop("return_key_deps", False)
+    io_deps = kwargs.pop("io_deps", {})
     if return_key_deps:
         key_deps = {}
 
@@ -950,29 +953,70 @@ def make_blockwise_graph(func, output, out_indices, *arrind_pairs, **kwargs):
                 args.append(tups)
         out_key = (output,) + out_coords
 
-        if deserializing:
-            deps.update(func_future_args)
-            args = stringify_collection_keys(args) + list(func_future_args)
-            if kwargs:
-                val = {
-                    "function": dumps_function(apply),
-                    "args": warn_dumps(args),
-                    "kwargs": warn_dumps(kwargs2),
-                }
+        # import pdb; pdb.set_trace()
+        # pass
+
+        # from distributed.worker import _deserialize
+
+        if io_deps:
+            # Inject IO arguments
+            print("----HEREEE----")
+            print("----0---func", func, "\n")
+            print("----0---kwargs", kwargs, "\n")
+            print("----0---args", args, "\n")
+            args = _inject_io_args(args, io_deps, stringify_keys=deserializing)
+            print("----1---args", args, "\n")
+
+            if deserializing:
+                deps.update(func_future_args)
+                # args = [list(_deserialize(args[0][0])[0])]
+                args += list(func_future_args)
+                print("----_deserialize", args, "\n")
+                if kwargs:
+                    val = {
+                        "function": dumps_function(apply),
+                        "args": warn_dumps(args),
+                        "kwargs": warn_dumps(kwargs2),
+                    }
+                else:
+                    val = {"function": func, "args": warn_dumps(args)}
             else:
-                val = {"function": func, "args": warn_dumps(args)}
+                if kwargs:
+                    val = (apply, func, args, kwargs2)
+                else:
+                    args.insert(0, func)
+                    val = tuple(args)
+
         else:
-            if kwargs:
-                val = (apply, func, args, kwargs2)
+            if deserializing:
+                deps.update(func_future_args)
+                args = stringify_collection_keys(args) + list(func_future_args)
+                if kwargs:
+                    val = {
+                        "function": dumps_function(apply),
+                        "args": warn_dumps(args),
+                        "kwargs": warn_dumps(kwargs2),
+                    }
+                else:
+                    val = {"function": func, "args": warn_dumps(args)}
             else:
-                args.insert(0, func)
-                val = tuple(args)
+                if kwargs:
+                    val = (apply, func, args, kwargs2)
+                else:
+                    args.insert(0, func)
+                    val = tuple(args)
+
         dsk[out_key] = val
         if return_key_deps:
-            key_deps[out_key] = deps
+            key_deps[out_key] = set(
+                [dep for dep in deps if len(dep) and dep[0] not in io_deps]
+            )
 
     if dsk2:
         dsk.update(ensure_dict(dsk2))
+
+    print("dsk", dsk, "\n")
+    # print("key_deps", key_deps, "\n")
 
     if return_key_deps:
         return dsk, key_deps
