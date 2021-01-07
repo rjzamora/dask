@@ -998,6 +998,7 @@ def make_blockwise_graph(func, output, out_indices, *arrind_pairs, **kwargs):
         print("----0---func", func, "\n")
         print("----0---kwargs", kwargs, "\n")
         print("----0---args", args, "\n")
+        print("----0---deps", deps, "\n")
         if io_deps:
             # Inject IO arguments
             args = _inject_io_args(args, io_deps, stringify_keys=deserializing)
@@ -1029,6 +1030,7 @@ def make_blockwise_graph(func, output, out_indices, *arrind_pairs, **kwargs):
 
         else:
             if deserializing:
+                deps = set()
                 # deps.update(func_future_args)
                 if io_deps_args:
                     from distributed.worker import _deserialize
@@ -1038,7 +1040,7 @@ def make_blockwise_graph(func, output, out_indices, *arrind_pairs, **kwargs):
                     if kwargs:
                         val = {
                             "function": dumps_function(apply),
-                            "args": warn_dumps(_deserialize(io_deps_args)[0]),
+                            "args": io_deps_args,
                             "kwargs": warn_dumps(kwargs2),
                         }
                     else:
