@@ -1,5 +1,4 @@
 import itertools
-import warnings
 
 import numpy as np
 
@@ -579,17 +578,54 @@ class BlockwiseIO(Blockwise):
     def __dask_distributed_pack__(self, client):
         from distributed.worker import warn_dumps  # , dumps_task, dumps_function
 
+        argpairs = self.indices
+        dims = _make_dims(argpairs, self.numblocks, self.new_axes)
+
+        (coord_maps, concat_axes, dummies) = _get_coord_mapping(
+            dims,
+            self.output,
+            self.output_indices,
+            self.numblocks,
+            argpairs,
+            self.concatenate,
+        )
+
+        output_blocks = itertools.product(
+            *[range(dims[i]) for i in self.output_indices]
+        )
+        for out_coords in output_blocks:
+            coords = out_coords + dummies
+            args = []
+            for cmap, axes, (arg, ind) in zip(coord_maps, concat_axes, argpairs):
+                if ind is None:
+                    args.append(arg)
+                else:
+                    arg_coords = tuple(coords[c] for c in cmap)
+                    if axes:
+                        tups = lol_product((arg,), arg_coords)
+                        if self.concatenate:
+                            tups = (self.concatenate, tups, axes)
+                    else:
+                        tups = (arg,) + arg_coords
+                    args.append(tups)
+
+        print("ARGSSSSS-IN", args, "\n")
+        args = _inject_io_args(args, self.io_deps)
+        print("ARGSSSSS-OUT", args, "\n")
+
         def _clean_dict(d):
             return {k: (None, warn_dumps(tuple(v[1:]))) for k, v in dict(d).items()}
 
         ret = super().__dask_distributed_pack__(client)
+        # ret["io_deps_args"] = warn_dumps(args + list(ret["func_future_args"]))
+        ret["io_deps_args"] = warn_dumps(list(args))
         ret["io_deps"] = {k: _clean_dict(v) for k, v in self.io_deps.items()}
 
         return ret
 
     @classmethod
     def __dask_distributed_unpack__(cls, state, dsk, dependencies, annotations):
-        # from distributed.worker import _deserialize
+        from distributed.worker import _deserialize
 
         # _io_deps = {}
         # for k, v in state["io_deps"].items():
@@ -600,6 +636,8 @@ class BlockwiseIO(Blockwise):
         #         print("v2.frames", v2.frames)
         #         _dep[k2] = _deserialize(v2)
         #     _io_deps[k] = _dep
+
+        print("STATE[io_deps_args]", _deserialize(state["io_deps_args"]), "\n")
 
         raw, raw_deps = make_blockwise_graph(
             state["func"],
@@ -615,7 +653,7 @@ class BlockwiseIO(Blockwise):
             deserializing=True,
             func_future_args=state["func_future_args"],
             io_deps=state["io_deps"],
-            # io_deps=_io_deps,
+            # io_deps_args=state["io_deps_args"],
         )
         global_dependencies = list(state["global_dependencies"])
 
@@ -893,6 +931,7 @@ def make_blockwise_graph(func, output, out_indices, *arrind_pairs, **kwargs):
     func_future_args = kwargs.pop("func_future_args", None)
     return_key_deps = kwargs.pop("return_key_deps", False)
     io_deps = kwargs.pop("io_deps", {})
+    io_deps_args = kwargs.pop("io_deps_args", [])
     if return_key_deps:
         key_deps = {}
 
@@ -955,13 +994,12 @@ def make_blockwise_graph(func, output, out_indices, *arrind_pairs, **kwargs):
         out_key = (output,) + out_coords
 
         # from distributed.worker import _deserialize
-
+        print("----HEREEE----")
+        print("----0---func", func, "\n")
+        print("----0---kwargs", kwargs, "\n")
+        print("----0---args", args, "\n")
         if io_deps:
             # Inject IO arguments
-            print("----HEREEE----")
-            print("----0---func", func, "\n")
-            print("----0---kwargs", kwargs, "\n")
-            print("----0---args", args, "\n")
             args = _inject_io_args(args, io_deps, stringify_keys=deserializing)
             print("----1---args", args, "\n")
 
@@ -991,16 +1029,30 @@ def make_blockwise_graph(func, output, out_indices, *arrind_pairs, **kwargs):
 
         else:
             if deserializing:
-                deps.update(func_future_args)
-                args = stringify_collection_keys(args) + list(func_future_args)
-                if kwargs:
-                    val = {
-                        "function": dumps_function(apply),
-                        "args": warn_dumps(args),
-                        "kwargs": warn_dumps(kwargs2),
-                    }
+                # deps.update(func_future_args)
+                if io_deps_args:
+                    from distributed.worker import _deserialize
+
+                    print("----1---io_deps_args", io_deps_args, "\n")
+                    print("----2---io_deps_args", _deserialize(io_deps_args)[0], "\n")
+                    if kwargs:
+                        val = {
+                            "function": dumps_function(apply),
+                            "args": warn_dumps(_deserialize(io_deps_args)[0]),
+                            "kwargs": warn_dumps(kwargs2),
+                        }
+                    else:
+                        val = {"function": func, "args": io_deps_args}
                 else:
-                    val = {"function": func, "args": warn_dumps(args)}
+                    args = stringify_collection_keys(args) + list(func_future_args)
+                    if kwargs:
+                        val = {
+                            "function": dumps_function(apply),
+                            "args": warn_dumps(args),
+                            "kwargs": warn_dumps(kwargs2),
+                        }
+                    else:
+                        val = {"function": func, "args": warn_dumps(args)}
             else:
                 if kwargs:
                     val = (apply, func, args, kwargs2)
@@ -1118,26 +1170,10 @@ def optimize_blockwise(graph, keys=()):
     --------
     rewrite_blockwise
     """
-    with warnings.catch_warnings():
-        # In some cases, rewrite_blockwise (called internally) will do a bad
-        # thing like `string in array[int].
-        # See dask/array/tests/test_atop.py::test_blockwise_numpy_arg for
-        # an example. NumPy currently raises a warning that 'a' == array([1, 2])
-        # will change from returning `False` to `array([False, False])`.
-        #
-        # Users shouldn't see those warnings, so we filter them.
-        # We set the filter here, rather than lower down, to avoid having to
-        # create and remove the filter many times inside a tight loop.
-
-        # https://github.com/dask/dask/pull/4805#discussion_r286545277 explains
-        # why silencing this warning shouldn't cause issues.
-        warnings.filterwarnings(
-            "ignore", "elementwise comparison failed", Warning
-        )  # FutureWarning or DeprecationWarning
+    out = _optimize_blockwise(graph, keys=keys)
+    while out.dependencies != graph.dependencies:
+        graph = out
         out = _optimize_blockwise(graph, keys=keys)
-        while out.dependencies != graph.dependencies:
-            graph = out
-            out = _optimize_blockwise(graph, keys=keys)
     return out
 
 
