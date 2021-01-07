@@ -670,8 +670,9 @@ def _inject_io_args(args, io_deps, stringify_keys=False):
             if io_dep and io_dep in arg:
                 args[k] = list(io_deps[io_dep][arg][1:])
                 if stringify_keys:
+                    print("^^^^^^ args[k]", args[k], "\n")
                     args[k] = list(_deserialize(args[k][0])[0])
-                    print("^^^^^^args[k]", args[k], "\n")
+                    print("vvvvvv args[k]", args[k], "\n")
                 replaced = True
                 break
         if stringify_keys and not replaced:
@@ -953,9 +954,6 @@ def make_blockwise_graph(func, output, out_indices, *arrind_pairs, **kwargs):
                 args.append(tups)
         out_key = (output,) + out_coords
 
-        # import pdb; pdb.set_trace()
-        # pass
-
         # from distributed.worker import _deserialize
 
         if io_deps:
@@ -967,10 +965,14 @@ def make_blockwise_graph(func, output, out_indices, *arrind_pairs, **kwargs):
             args = _inject_io_args(args, io_deps, stringify_keys=deserializing)
             print("----1---args", args, "\n")
 
+            # import pdb; pdb.set_trace()
+            # pass
+
             if deserializing:
-                deps.update(func_future_args)
-                # args = [list(_deserialize(args[0][0])[0])]
-                args += list(func_future_args)
+                if func_future_args:
+                    raise ValueError("func_future_args not supported with BlockwiseIO")
+                    # deps.update(func_future_args)
+                    # args += list(func_future_args)
                 print("----_deserialize", args, "\n")
                 if kwargs:
                     val = {
@@ -1015,7 +1017,7 @@ def make_blockwise_graph(func, output, out_indices, *arrind_pairs, **kwargs):
     if dsk2:
         dsk.update(ensure_dict(dsk2))
 
-    print("dsk", dsk, "\n")
+    # print("dsk", dsk, "\n")
     # print("key_deps", key_deps, "\n")
 
     if return_key_deps:
