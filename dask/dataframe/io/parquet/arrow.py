@@ -3,6 +3,7 @@ from collections import defaultdict
 from datetime import datetime
 import json
 import warnings
+import pickle
 from distutils.version import LooseVersion
 
 import numpy as np
@@ -1406,13 +1407,23 @@ class ArrowDatasetEngine(Engine):
         pkeys = partition_keys.get(full_path, None)
         if partition_obj and pkeys is None:
             return None  # This partition was filtered
-        return {
+
+        # Check if we are passing a fragment or a file_path
+        frag = frag_map[(full_path, rg_list[0])] if frag_map else None
+
+        part = {
             "piece": (
-                frag_map[(full_path, rg_list[0])] if frag_map else full_path,
+                full_path,
+                # frag if frag else full_path,
                 rg_list,
                 pkeys,
             ),
         }
+
+        if frag:
+            part.update({"kwargs": {"expr": pickle.dumps(frag.partition_expression)}})
+
+        return part
 
     @classmethod
     def _process_metadata(
@@ -1459,7 +1470,7 @@ class ArrowDatasetEngine(Engine):
         )
         pass_frags = (
             filters
-            and (not read_from_paths)
+            # and (not read_from_paths)
             and _need_fragments(filters, partition_info.get("partition_keys", None))
         )
 
@@ -1519,31 +1530,44 @@ class ArrowDatasetEngine(Engine):
             # Check if we have partitioning information.
             # Will only have this if the engine="pyarrow-dataset"
             partitioning = kwargs.pop("partitioning", None)
+            partition_expression = kwargs.pop("expr", None)
+            if partition_expression:
+                partition_expression = pickle.loads(partition_expression)
 
             # Check if we need to generate a fragment for filtering.
             # We only need to do this if we are applying filters to
             # columns that were not already filtered by "partition".
             if partitioning and _need_fragments(filters, partition_keys):
 
-                # We are filtering with "pyarrow-dataset".
-                # Need to convert the path and row-group IDs
-                # to a single "fragment" to read
-                ds = pa_ds.dataset(
+                from pyarrow._fs import LocalFileSystem
+
+                frag = pa_ds.ParquetFileFormat().make_fragment(
                     path_or_frag,
-                    filesystem=fs,
-                    format="parquet",
-                    partitioning=partitioning["obj"].discover(
-                        *partitioning.get("args", []),
-                        **partitioning.get("kwargs", {}),
-                    ),
+                    LocalFileSystem(),  # fs,
+                    partition_expression,
+                    # [r.id for r in frag.row_groups],
+                    row_groups if row_groups != [None] else None,
                 )
-                frags = list(ds.get_fragments())
-                assert len(frags) == 1
-                frag = (
-                    _frag_subset(frags[0], row_groups)
-                    if row_groups != [None]
-                    else frags[0]
-                )
+
+                # # We are filtering with "pyarrow-dataset".
+                # # Need to convert the path and row-group IDs
+                # # to a single "fragment" to read
+                # ds = pa_ds.dataset(
+                #     path_or_frag,
+                #     filesystem=fs,
+                #     format="parquet",
+                #     partitioning=partitioning["obj"].discover(
+                #         *partitioning.get("args", []),
+                #         **partitioning.get("kwargs", {}),
+                #     ),
+                # )
+                # frags = list(ds.get_fragments())
+                # assert len(frags) == 1
+                # frag = (
+                #     _frag_subset(frags[0], row_groups)
+                #     if row_groups != [None]
+                #     else frags[0]
+                # )
 
         if frag:
             cols = []
