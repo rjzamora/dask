@@ -16,11 +16,11 @@ import copy
 
 import tlz as toolz
 
-from . import config
-from .utils import ensure_dict, ignoring, stringify
-from .base import clone_key, flatten, is_dask_collection
-from .core import reverse_dict, keys_in_tasks
-from .utils_test import add, inc  # noqa: F401
+from .. import config
+from ..utils import ensure_dict, ignoring, stringify
+from ..base import clone_key, flatten, is_dask_collection
+from ..core import reverse_dict, keys_in_tasks
+from ..utils_test import add, inc  # noqa: F401
 
 
 def compute_layer_dependencies(layers):
