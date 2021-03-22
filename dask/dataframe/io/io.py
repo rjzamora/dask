@@ -96,10 +96,7 @@ class FromArrayIODeps:
         # to send to each task.
         if len(columns) != len(self.meta.columns):
             _cols = list(self.meta.columns)
-            _col_inds = [_cols.index(c) for c in columns]
-            if len(_col_inds) == 1:
-                _col_inds = _col_inds[0]
-            _x = self.x[:, _col_inds]
+            _x = self.x[:, [_cols.index(c) for c in columns]]
             _meta = self.meta[columns]
         else:
             _x = self.x
