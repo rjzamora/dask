@@ -104,9 +104,6 @@ class FromArrayIODeps:
 
         io_deps = {}
         for i in range(0, int(ceil(len(_x) / self.chunksize))):
-            # TODO: The following call used to be a task - should it be?
-            # It is not clear to me why we would want to send an entire
-            # copy of the array to every slice task.
             data = getitem(_x, slice(i * self.chunksize, (i + 1) * self.chunksize))
             if is_series_like(_meta):
                 io_deps[(i,)] = (_meta, data, None, _meta.dtype, _meta.name)
