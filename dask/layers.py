@@ -33,6 +33,21 @@ class CallableLazyImport:
         return import_term(self.function_path)(*args, **kwargs)
 
 
+class IOFunctionWrapper:
+    def __init__(self, func):
+        self.func = func
+
+    def __call__(self, part):
+        if isinstance(part, bytes):
+            import pickle
+
+            part = pickle.loads(part)
+
+        if self.func is None:
+            return part
+        return self.func(*part)
+
+
 #
 ##
 ###  Array Layers & Utilities
@@ -912,10 +927,11 @@ class DataFrameIOLayer(Blockwise, DataFrameLayer):
         name,
         columns,
         inputs,
-        io_func,
+        io_func=None,
         part_ids=None,
         label=None,
         require_pickle=False,
+        create_io_deps_cb=None,
         annotations=None,
     ):
         self.name = name
@@ -924,11 +940,19 @@ class DataFrameIOLayer(Blockwise, DataFrameLayer):
         self.io_func = io_func
         self.part_ids = list(range(len(inputs))) if part_ids is None else part_ids
         self.label = label
+        self.create_io_deps_cb = create_io_deps_cb
         self.annotations = annotations
         self.require_pickle = require_pickle
 
-        # Define mapping between key index and "part"
-        io_arg_map = {(i,): self.inputs[i] for i in self.part_ids}
+        if callable(create_io_deps_cb):
+            # Use `create_io_deps_cb` to generate `io_arg_map`.
+            # This option can be used
+            io_arg_map = create_io_deps_cb(
+                self.inputs, part_ids=self.part_ids, columns=columns
+            )
+        else:
+            # Define mapping between key index and "part"
+            io_arg_map = {(i,): self.inputs[i] for i in self.part_ids}
 
         # Wrap io_arg_map to in MaterializedIODeps if it is
         # expected to contain objects than cannot be serialized
@@ -941,7 +965,7 @@ class DataFrameIOLayer(Blockwise, DataFrameLayer):
 
         # Create Blockwise layer
         dataframe_blockwise_io_layer(
-            io_func,
+            IOFunctionWrapper(io_func),
             io_arg_map,
             self.name,
             len(self.part_ids),
@@ -958,6 +982,7 @@ class DataFrameIOLayer(Blockwise, DataFrameLayer):
                 self.inputs,
                 self.io_func,
                 part_ids=self.part_ids,
+                create_io_deps_cb=self.create_io_deps_cb,
                 annotations=self.annotations,
                 require_pickle=self.require_pickle,
             )

@@ -11,7 +11,8 @@ from ...base import tokenize
 from ... import array as da
 from ...dataframe.core import new_dd_object
 from ...delayed import delayed
-
+from ...layers import DataFrameIOLayer
+from ...highlevelgraph import HighLevelGraph
 from ..core import DataFrame, Series, Index, new_dd_object, has_parallel_type
 from ..shuffle import set_partition
 from ..utils import insert_meta_param_description, check_meta, make_meta, is_series_like
@@ -78,6 +79,45 @@ def _meta_from_array(x, columns=None, index=None, meta=None):
     return meta._constructor(data, columns=columns, index=index)
 
 
+class FromArrayIODeps:
+    def __init__(self, x, meta, chunksize, columns):
+        self.x = x
+        self.meta = meta
+        self.chunksize = chunksize
+        self.columns = columns
+
+    def __call__(self, inputs, part_ids=None, columns=None):
+
+        # Partition culling
+        part_ids = list(range(len(inputs))) if part_ids is None else part_ids
+
+        # Column projection.
+        # We select only the necessary columns of the array
+        # to send to each task.
+        if len(columns) != len(self.meta.columns):
+            _cols = list(self.meta.columns)
+            _col_inds = [_cols.index(c) for c in columns]
+            if len(_col_inds) == 1:
+                _col_inds = _col_inds[0]
+            _x = self.x[:, _col_inds]
+            _meta = self.meta[columns]
+        else:
+            _x = self.x
+            _meta = self.meta
+
+        io_deps = {}
+        for i in range(0, int(ceil(len(_x) / self.chunksize))):
+            # TODO: The following call used to be a task - should it be?
+            # It is not clear to me why we would want to send an entire
+            # copy of the array to every slice task.
+            data = getitem(_x, slice(i * self.chunksize, (i + 1) * self.chunksize))
+            if is_series_like(_meta):
+                io_deps[(i,)] = (_meta, data, None, _meta.dtype, _meta.name)
+            else:
+                io_deps[(i,)] = (_meta, data, None, _meta.columns)
+        return io_deps
+
+
 def from_array(x, chunksize=50000, columns=None, meta=None):
     """Read any sliceable array into a Dask Dataframe
 
@@ -121,14 +161,37 @@ def from_array(x, chunksize=50000, columns=None, meta=None):
     token = tokenize(x, chunksize, columns)
     name = "from_array-" + token
 
-    dsk = {}
-    for i in range(0, int(ceil(len(x) / chunksize))):
-        data = (getitem, x, slice(i * chunksize, (i + 1) * chunksize))
-        if is_series_like(meta):
-            dsk[name, i] = (type(meta), data, None, meta.dtype, meta.name)
-        else:
-            dsk[name, i] = (type(meta), data, None, meta.columns)
-    return new_dd_object(dsk, name, meta, divisions)
+    # Create Blockwise layer
+    layer = DataFrameIOLayer(
+        name,
+        meta.columns,
+        range(len(divisions) - 1),
+        io_func=lambda x, *args: type(x)(*args),
+        create_io_deps_cb=FromArrayIODeps(x, meta, chunksize, columns),
+        require_pickle=True,
+    )
+    graph = HighLevelGraph({name: layer}, {name: set()})
+    return new_dd_object(graph, name, meta, divisions)
+
+
+class FromPandasIODeps:
+    def __init__(self, data, locations):
+        self.data = data
+        self.starts = locations[:-1]
+        self.stops = locations[1:]
+
+    def __call__(self, inputs, part_ids=None, columns=None):
+
+        # Column projection
+        _data = self.data
+        if columns is not None and hasattr(self.data, "columns"):
+            _data = self.data[columns]
+
+        # Partition culling
+        part_ids = list(range(len(inputs))) if part_ids is None else part_ids
+
+        # Return DataFrame/Series slices
+        return {(i,): _data.iloc[self.starts[i] : self.stops[i]] for i in part_ids}
 
 
 def from_pandas(data, npartitions=None, chunksize=None, sort=True, name=None):
@@ -227,11 +290,16 @@ def from_pandas(data, npartitions=None, chunksize=None, sort=True, name=None):
         locations = list(range(0, nrows, chunksize)) + [len(data)]
         divisions = [None] * len(locations)
 
-    dsk = {
-        (name, i): data.iloc[start:stop]
-        for i, (start, stop) in enumerate(zip(locations[:-1], locations[1:]))
-    }
-    return new_dd_object(dsk, name, data, divisions)
+    # Create Blockwise layer
+    layer = DataFrameIOLayer(
+        name,
+        data.columns,
+        range(len(divisions) - 1),
+        create_io_deps_cb=FromPandasIODeps(data, locations),
+        require_pickle=True,
+    )
+    graph = HighLevelGraph({name: layer}, {name: set()})
+    return new_dd_object(graph, name, data, divisions)
 
 
 def from_bcolz(x, chunksize=None, categorize=True, index=None, lock=lock, **kwargs):
