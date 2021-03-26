@@ -821,8 +821,9 @@ def make_blockwise_graph(
         key_deps = {}
 
     if deserializing:
-        from distributed.worker import warn_dumps, dumps_function
+        from .layers import SerializedFunction
         from distributed.protocol.serialize import import_allowed_module
+        from distributed.protocol import to_serialize
     else:
         from importlib import import_module as import_allowed_module
 
@@ -918,13 +919,10 @@ def make_blockwise_graph(
             deps.update(func_future_args)
             args += list(func_future_args)
             if kwargs:
-                val = {
-                    "function": dumps_function(apply),
-                    "args": warn_dumps(args),
-                    "kwargs": warn_dumps(kwargs2),
-                }
+                val = to_serialize((apply, SerializedFunction(func), args, kwargs2))
             else:
-                val = {"function": func, "args": warn_dumps(args)}
+                args.insert(0, SerializedFunction(func))
+                val = to_serialize(tuple(args))
         else:
             if kwargs:
                 val = (apply, func, args, kwargs2)
