@@ -417,6 +417,8 @@ class Blockwise(Layer):
 
     @classmethod
     def __dask_distributed_unpack__(cls, state, dsk, dependencies):
+        from .layers import SerializedFunction
+
         # Make sure we convert list items back from tuples in `indices`.
         # The msgpack serialization will have converted lists into
         # tuples, and tuples may be stringified during graph
@@ -427,7 +429,7 @@ class Blockwise(Layer):
         ]
 
         layer_dsk, layer_deps = make_blockwise_graph(
-            state["func"],
+            SerializedFunction(state["func"]),
             state["output"],
             state["output_indices"],
             *indices,
@@ -821,7 +823,6 @@ def make_blockwise_graph(
         key_deps = {}
 
     if deserializing:
-        from .layers import SerializedFunction
         from distributed.protocol.serialize import import_allowed_module
         from distributed.protocol import to_serialize
     else:
@@ -918,18 +919,12 @@ def make_blockwise_graph(
         if deserializing:
             deps.update(func_future_args)
             args += list(func_future_args)
-            if kwargs:
-                val = to_serialize((apply, SerializedFunction(func), args, kwargs2))
-            else:
-                args.insert(0, SerializedFunction(func))
-                val = to_serialize(tuple(args))
+        if kwargs:
+            val = (apply, func, args, kwargs2)
         else:
-            if kwargs:
-                val = (apply, func, args, kwargs2)
-            else:
-                args.insert(0, func)
-                val = tuple(args)
-        dsk[out_key] = val
+            args.insert(0, func)
+            val = tuple(args)
+        dsk[out_key] = to_serialize(val) if deserializing else val
         if return_key_deps:
             key_deps[out_key] = deps
 
