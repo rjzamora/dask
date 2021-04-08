@@ -2930,6 +2930,42 @@ def test_partitioned_preserve_index(tmpdir, write_engine, read_engine):
     assert_eq(expect, got)
 
 
+@pytest.mark.parametrize(
+    "write_cols",
+    [
+        pytest.param(
+            ["part", "col"],
+            marks=pytest.mark.xfail(),
+        ),
+        ["part", "kind", "col"],
+    ],
+)
+def test_partitioned_column_overlap(tmpdir, engine, write_cols):
+
+    tmpdir.mkdir("part=a")
+    tmpdir.mkdir("part=b")
+    path0 = str(tmpdir.mkdir("part=a/kind=x"))
+    path1 = str(tmpdir.mkdir("part=b/kind=x"))
+    path0 = os.path.join(path0, "data.parquet")
+    path1 = os.path.join(path1, "data.parquet")
+
+    _df1 = pd.DataFrame({"part": "a", "kind": "x", "col": range(5)})
+    _df2 = pd.DataFrame({"part": "b", "kind": "x", "col": range(5)})
+    df1 = _df1[write_cols]
+    df2 = _df2[write_cols]
+    df1.to_parquet(path0, index=False)
+    df2.to_parquet(path1, index=False)
+
+    if engine == "fastparquet":
+        path = [path0, path1]
+    else:
+        path = str(tmpdir)
+
+    # result = dd.read_parquet(path, engine=engine).compute()
+    # expect = pd.concat([_df1, _df2], ignore_index=True)
+    dd.read_parquet(path, engine=engine).compute()
+
+
 def test_from_pandas_preserve_none_index(tmpdir, engine):
 
     check_pyarrow()
