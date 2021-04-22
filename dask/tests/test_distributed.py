@@ -1,3 +1,5 @@
+import importlib
+
 import pytest
 
 distributed = pytest.importorskip("distributed")
@@ -25,6 +27,20 @@ from dask.utils import get_named_args, tmpdir
 if "should_check_state" in get_named_args(gen_cluster):
     gen_cluster = partial(gen_cluster, should_check_state=False)
     cluster = partial(cluster, should_check_state=False)
+
+
+def check_modules(*args):
+    # Simple module-check decorator to avoid skipping
+    # test after gen_cluster is used.
+    missing = [
+        args[i]
+        for i in [
+            m
+            for m, mod in enumerate(map(importlib.util.find_spec, args))
+            if mod is None
+        ]
+    ]
+    return pytest.mark.skipif(missing, reason=f"Missing: {missing}")
 
 
 def test_can_import_client():
@@ -172,6 +188,7 @@ def test_to_hdf_scheduler_distributed(npartitions, c):
     test_to_hdf_schedulers(None, npartitions)
 
 
+@check_modules("pandas", "dask.dataframe")
 @gen_cluster(client=True)
 def test_serializable_groupby_agg(c, s, a, b):
     pd = pytest.importorskip("pandas")
@@ -246,6 +263,7 @@ def test_local_scheduler():
     asyncio.get_event_loop().run_until_complete(f())
 
 
+@check_modules("numpy", "dask.array")
 @gen_cluster(client=True)
 async def test_annotations_blockwise_unpack(c, s, a, b):
     da = pytest.importorskip("dask.array")
@@ -310,6 +328,7 @@ def test_blockwise_array_creation(c, io, fuse):
         da.assert_eq(darr, narr)
 
 
+@check_modules("numpy", "dask.array")
 @gen_cluster(client=True)
 async def test_blockwise_numpy_args(c, s, a, b):
     """Test pack/unpack of blockwise that includes a NumPy literal argument"""
@@ -327,6 +346,7 @@ async def test_blockwise_numpy_args(c, s, a, b):
     assert res == 1000
 
 
+@check_modules("numpy", "dask.array")
 @gen_cluster(client=True)
 async def test_blockwise_numpy_kwargs(c, s, a, b):
     """Test pack/unpack of blockwise that includes a NumPy literal keyword argument"""
@@ -342,6 +362,7 @@ async def test_blockwise_numpy_kwargs(c, s, a, b):
     assert res == 1000
 
 
+@check_modules("numpy", "dask.array", "pandas", "dask.dataframe")
 @gen_cluster(client=True)
 async def test_combo_of_layer_types(c, s, a, b):
     """Check pack/unpack of a HLG that has every type of Layers!"""
@@ -390,6 +411,7 @@ async def test_annotation_pack_unpack(c, s, a, b):
     assert annotations == {"workers": {"n": ("alice",)}}
 
 
+@check_modules("numpy", "dask.array")
 @gen_cluster(client=True)
 async def test_blockwise_concatenate(c, s, a, b):
     """Test a blockwise operation with concatenated axes"""
