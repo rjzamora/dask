@@ -494,7 +494,7 @@ def fuse(
         dict mapping dependencies after fusion.  Useful side effect to accelerate other
         downstream optimizations.
     """
-    if not config.get("optimization.fuse.active"):
+    if config.get("optimization.fuse.active") is False:
         return dsk, dependencies
 
     if keys is not None and not isinstance(keys, set):

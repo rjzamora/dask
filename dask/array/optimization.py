@@ -46,7 +46,7 @@ def optimize(
     dsk = fuse_roots(dsk, keys=keys)
     dsk = dsk.cull(set(keys))
 
-    if not config.get("optimization.fuse.active"):
+    if config.get("optimization.fuse.active") is False:
         return dsk
 
     dependencies = dsk.get_all_dependencies()
