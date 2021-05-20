@@ -1730,6 +1730,42 @@ def test_writing_parquet_with_partition_on_and_compression(tmpdir, compression, 
     check_compression(engine, fn, compression)
 
 
+@pytest.mark.parametrize("compression,", [{"a": "gzip", "b": "snappy"}, {"b": "gzip"}])
+def test_to_parquet_mixed_compression(tmpdir, compression, engine):
+
+    # Require snappy and pyarrow (to inspect compression type)
+    pytest.importorskip("snappy")
+    pytest.importorskip("pyarrow")
+
+    # Write simple parquet dataset with compression
+    dd.from_pandas(
+        pd.DataFrame({"a": [0, 1] * 5, "b": range(10)}),
+        npartitions=2,
+    ).to_parquet(
+        str(tmpdir),
+        compression=compression,
+        engine=engine,
+        write_index=False,
+        compute=False,
+    ).compute(
+        scheduler="synchronous"
+    )
+
+    # Inspect the result
+    metadata = pa.parquet.ParquetDataset(str(tmpdir)).metadata
+    names = metadata.schema.names
+    check = {}
+    for j, name in enumerate(names):
+        column = metadata.row_group(0).column(j)
+        expect = compression.get(name, None)
+        if expect:
+            check[name] = column.compression.lower()
+
+    # Check that the actual compression matches
+    # the expected result
+    assert check == compression
+
+
 @pytest.fixture(
     params=[
         # fastparquet 0.1.3
