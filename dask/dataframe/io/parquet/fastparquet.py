@@ -304,7 +304,11 @@ class FastParquetEngine(Engine):
             isinstance(parts, list) and len(parts) and isinstance(parts[0], str)
         ) or len(index_cols) > 1:
             gather_statistics = False
-        elif chunksize is None and filters is None and len(index_cols) == 0:
+        elif (
+            (chunksize is None or isinstance(chunksize, tuple) and not chunksize[0])
+            and filters is None
+            and len(index_cols) == 0
+        ):
             gather_statistics = False
 
         # Make sure gather_statistics allows filtering
@@ -366,9 +370,10 @@ class FastParquetEngine(Engine):
 
         # Fastparquet does not use a natural sorting
         # order for partitioned data. Re-sort by path
+        _chunksize = chunksize[0] if isinstance(chunksize, tuple) else chunksize
         if (
             pqpartitions is not None
-            and chunksize
+            and _chunksize
             and pf.row_groups
             and pf.row_groups[0].columns[0].file_path
         ):
@@ -471,7 +476,7 @@ class FastParquetEngine(Engine):
                             cmax = pd.Timestamp(cmax, tz=tz)
                         last = cmax_last.get(name, None)
 
-                        if not (filters or chunksize):
+                        if not (filters or _chunksize):
                             # Only think about bailing if we don't need
                             # stats for filtering
                             if cmin is None or (last and cmin < last):
@@ -499,7 +504,7 @@ class FastParquetEngine(Engine):
                         cmax_last[name] = cmax
                     else:
                         if (
-                            not (filters or chunksize)
+                            not (filters or _chunksize)
                             and column.meta_data.num_values > 0
                         ):
                             # We are collecting statistics for divisions

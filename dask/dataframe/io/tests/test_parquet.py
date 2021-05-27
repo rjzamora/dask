@@ -2757,7 +2757,7 @@ def test_chunksize_files(
 def test_chunksize_tuple(tmpdir, write_engine, read_engine):
 
     chunksize = (
-        "1MiB",
+        None,  # "1MiB",
         "a=[^/]*/",  # Aggregate files within the same a=* partition
     )
     partition_on = ["a", "b"]

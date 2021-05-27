@@ -1283,7 +1283,11 @@ class ArrowDatasetEngine(Engine):
             and isinstance(metadata[0], str)
         ) or len(index_cols) > 1:
             gather_statistics = False
-        elif chunksize is None and filters is None and len(index_cols) == 0:
+        elif (
+            (chunksize is None or isinstance(chunksize, tuple) and not chunksize[0])
+            and filters is None
+            and len(index_cols) == 0
+        ):
             gather_statistics = False
 
         # Determine which columns need statistics.
@@ -1335,6 +1339,7 @@ class ArrowDatasetEngine(Engine):
         file_row_groups = defaultdict(list)
         file_row_group_stats = defaultdict(list)
         file_row_group_column_stats = defaultdict(list)
+        _chunksize = chunksize[0] if isinstance(chunksize, tuple) else chunksize
         cmax_last = {}
         for (frag, row_group_info) in metadata:
             fpath = frag.path
@@ -1382,7 +1387,7 @@ class ArrowDatasetEngine(Engine):
                             cmin = statistics[name]["min"]
                             cmax = statistics[name]["max"]
                             last = cmax_last.get(name, None)
-                            if not (filters or chunksize):
+                            if not (filters or _chunksize):
                                 # Only think about bailing if we don't need
                                 # stats for filtering
                                 if cmin is None or (last and cmin < last):
@@ -1870,7 +1875,8 @@ class ArrowLegacyEngine(ArrowDatasetEngine):
         """
 
         sorted_row_group_indices = range(metadata.num_row_groups)
-        if chunksize:
+        _chunksize = chunksize[0] if isinstance(chunksize, tuple) else chunksize
+        if _chunksize:
             sorted_row_group_indices = sorted(
                 range(metadata.num_row_groups),
                 key=lambda x: metadata.row_group(x).column(0).file_path,
@@ -1919,7 +1925,7 @@ class ArrowLegacyEngine(ArrowDatasetEngine):
                         cmin = column.statistics.min
                         cmax = column.statistics.max
                         last = cmax_last.get(name, None)
-                        if not (filters or chunksize):
+                        if not (filters or _chunksize):
                             # Only think about bailing if we don't need
                             # stats for filtering
                             if cmin is None or (last and cmin < last):
@@ -1948,7 +1954,7 @@ class ArrowLegacyEngine(ArrowDatasetEngine):
                         cmax_last[name] = cmax
                     else:
 
-                        if not (filters or chunksize) and column.num_values > 0:
+                        if not (filters or _chunksize) and column.num_values > 0:
                             # We are collecting statistics for divisions
                             # only (no filters) - Lets bail.
                             gather_statistics = False

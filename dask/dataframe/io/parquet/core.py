@@ -319,6 +319,10 @@ def read_parquet(
         parts, statistics, filters, index, chunksize, fs
     )
 
+    # We can still aggregate files without statistics
+    if chunksize and not statistics:
+        parts, _ = aggregate_row_groups(parts, [], chunksize, fs)
+
     # Account for index and columns arguments.
     # Modify `meta` dataframe accordingly
     meta, index, columns = set_index_columns(
@@ -1153,6 +1157,9 @@ def set_index_columns(meta, index, columns, index_in_columns, auto_index_allowed
 
 
 def aggregate_row_groups(parts, stats, chunksize, fs):
+    import pdb
+
+    pdb.set_trace()
     if not stats[0].get("file_path_0", None):
         return parts, stats
 
