@@ -525,6 +525,7 @@ def _aggregate_stats(
                 "num-rows": df_rgs["num-rows"].sum(),
                 "total_byte_size": df_rgs["total_byte_size"].sum(),
                 "columns": [],
+                "partitions": file_row_group_stats[0].get("partitions", {}),
             }
         else:
             s = {
@@ -532,6 +533,7 @@ def _aggregate_stats(
                 "num-rows": file_row_group_stats[0]["num-rows"],
                 "total_byte_size": file_row_group_stats[0]["total_byte_size"],
                 "columns": [],
+                "partitions": file_row_group_stats[0].get("partitions", {}),
             }
 
         df_cols = None

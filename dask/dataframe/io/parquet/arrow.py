@@ -1323,6 +1323,8 @@ class ArrowDatasetEngine(Engine):
         stat_col_indices,
         filters,
         chunksize,
+        partition_keys,
+        fs,
     ):
         """Organize row-groups by file.
 
@@ -1376,6 +1378,8 @@ class ArrowDatasetEngine(Engine):
                             "num-rows": row_group.num_rows,
                             "total_byte_size": row_group.total_byte_size,
                         }
+                    if partition_keys and chunksize:
+                        s["partitions"] = dict(partition_keys[fpath])
                     cstats = []
                     for name, i in stat_col_indices.items():
                         if name in statistics:
@@ -1450,8 +1454,10 @@ class ArrowDatasetEngine(Engine):
         # Get full path (empty strings should be ignored)
         full_path = fs.sep.join([p for p in [data_path, filename] if p != ""])
 
-        pkeys = partition_keys.get(full_path, None)
+        pkeys = partition_keys.get(filename, None)
+        # pkeys = partition_keys.get(full_path, None)
         if partition_obj and pkeys is None:
+            # import pdb; pdb.set_trace()
             return None  # This partition was filtered
         return {
             "piece": (
@@ -1496,6 +1502,8 @@ class ArrowDatasetEngine(Engine):
             stat_col_indices,
             filters,
             chunksize,
+            partition_info["partition_keys"],
+            fs,
         )
 
         # Check if we need to pass a fragment for each output partition.
@@ -1752,7 +1760,11 @@ class ArrowLegacyEngine(ArrowDatasetEngine):
             ]
             partition_info["partitions"] = dataset.partitions
             for piece in dataset.pieces:
-                partition_info["partition_keys"][piece.path] = piece.partition_keys
+                rel_path = piece.path.split(base)[-1]
+                rel_path = (
+                    rel_path[len(fs.sep) :] if rel_path.startswith(fs.sep) else rel_path
+                )
+                partition_info["partition_keys"][rel_path] = piece.partition_keys
 
         # Make sure gather_statistics allows filtering
         # (if filters are desired)
@@ -1863,6 +1875,8 @@ class ArrowLegacyEngine(ArrowDatasetEngine):
         stat_col_indices,
         filters,
         chunksize,
+        partition_keys,
+        fs,
     ):
         """Organize row-groups by file.
 
@@ -1912,6 +1926,8 @@ class ArrowLegacyEngine(ArrowDatasetEngine):
                         "num-rows": row_group.num_rows,
                         "total_byte_size": row_group.total_byte_size,
                     }
+                if partition_keys and chunksize:
+                    s["partitions"] = dict(partition_keys[fpath])
                 cstats = []
                 for name, i in stat_col_indices.items():
                     column = row_group.column(i)
@@ -2006,6 +2022,8 @@ class ArrowLegacyEngine(ArrowDatasetEngine):
             stat_col_indices,
             filters,
             chunksize,
+            partition_info["partition_keys"],
+            fs,
         )
 
         # Convert organized row-groups to parts

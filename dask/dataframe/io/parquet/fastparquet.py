@@ -358,6 +358,7 @@ class FastParquetEngine(Engine):
         base_path,
         paths,
         chunksize,
+        fs,
     ):
         """Organize row-groups by file."""
 
@@ -438,6 +439,14 @@ class FastParquetEngine(Engine):
                     s = {
                         "num-rows": row_group.num_rows,
                         "total_byte_size": row_group.total_byte_size,
+                    }
+                if pqpartitions and chunksize:
+                    s["partitions"] = {
+                        c: cat
+                        for c, cat in zip(
+                            pqpartitions,
+                            fpath.split(fs.sep)[-(len(pqpartitions) + 1) : -1],
+                        )
                     }
                 cstats = []
                 for name, i in stat_col_indices.items():
@@ -621,6 +630,7 @@ class FastParquetEngine(Engine):
             base_path,
             paths,
             chunksize,
+            fs,
         )
 
         # Convert organized row-groups to parts

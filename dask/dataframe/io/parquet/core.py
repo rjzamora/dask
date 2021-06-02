@@ -1,6 +1,5 @@
 import copy
 import math
-import re
 import warnings
 from distutils.version import LooseVersion
 
@@ -1202,14 +1201,22 @@ def aggregate_row_groups(parts, stats, chunksize, fs):
                     next_root = next_stat["file_path_0"].split(fs.sep)[:-1]
                     multi_path_allowed = root == next_root
                 else:
-                    # Use regular-expression matching to check if files may
-                    # be aggregated.
-                    root = re.findall(aggregation_range, stat["file_path_0"])
-                    next_root = re.findall(aggregation_range, next_stat["file_path_0"])
-                    if len(root) == 1 and len(next_root) == 1:
-                        multi_path_allowed = root[0] == next_root[0]
-                    else:
-                        multi_path_allowed = False
+                    # Allow agregation if `aggregation_range` corresponds to
+                    # a matching partition dirictory
+                    root = stat.get("partitions", {}).get(aggregation_range, None)
+                    next_root = next_stat.get("partitions", {}).get(
+                        aggregation_range, None
+                    )
+                    multi_path_allowed = root and root == next_root
+
+                    # # Use regular-expression matching to check if files may
+                    # # be aggregated.
+                    # root = re.findall(aggregation_range, stat["file_path_0"])
+                    # next_root = re.findall(aggregation_range, next_stat["file_path_0"])
+                    # if len(root) == 1 and len(next_root) == 1:
+                    #     multi_path_allowed = root[0] == next_root[0]
+                    # else:
+                    #     multi_path_allowed = False
 
         if (same_path or multi_path_allowed) and (
             (next_stat["total_byte_size"] + stat["total_byte_size"]) <= chunksize
