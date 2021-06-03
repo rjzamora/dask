@@ -54,7 +54,6 @@ We proceed with hash joins in the following stages:
 2.  Perform embarrassingly parallel join across shuffled inputs.
 """
 import math
-import pickle
 import warnings
 from functools import partial, wraps
 
@@ -1317,9 +1316,6 @@ def _split_partition(df, on, nsplits):
     Hashing will be performed on the columns or index specified by `on`.
     """
 
-    if isinstance(on, bytes):
-        on = pickle.loads(on)
-
     if isinstance(on, str) or pd.api.types.is_list_like(on):
         # If `on` is a column name or list of column names, we
         # can hash/split by those columns.
@@ -1353,15 +1349,6 @@ def _concat_wrapper(dfs):
     if "_partitions" in df.columns:
         del df["_partitions"]
     return df
-
-
-def _merge_chunk_wrapper(*args, **kwargs):
-    return merge_chunk(
-        *args,
-        **{
-            k: pickle.loads(v) if isinstance(v, bytes) else v for k, v in kwargs.items()
-        },
-    )
 
 
 def broadcast_join(

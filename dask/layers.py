@@ -295,7 +295,7 @@ class SimpleShuffleLayer(DataFrameLayer):
 
     @classmethod
     def __dask_distributed_unpack__(cls, state, dsk, dependencies):
-        from distributed.worker import dumps_task
+        from distributed.protocol.serialize import to_serialize
 
         # msgpack will convert lists into tuples, here
         # we convert them back to lists
@@ -316,7 +316,7 @@ class SimpleShuffleLayer(DataFrameLayer):
         # TODO: use shuffle-knowledge to calculate dependencies more efficiently
         deps = {k: keys_in_tasks(keys, [v]) for k, v in layer_dsk.items()}
 
-        return {"dsk": toolz.valmap(dumps_task, layer_dsk), "deps": deps}
+        return {"dsk": toolz.valmap(to_serialize, layer_dsk), "deps": deps}
 
     def _construct_graph(self, deserializing=False):
         """Construct graph for a simple shuffle operation."""
@@ -661,14 +661,14 @@ class BroadcastJoinLayer(DataFrameLayer):
         return len(self._dict)
 
     def __dask_distributed_pack__(self, *args, **kwargs):
-        import pickle
+        from distributed.protocol.serialize import to_serialize
 
-        # Pickle complex merge_kwargs elements. Also
+        # Serialize complex merge_kwargs elements. Also
         # tuples, which may be confused with keys.
         _merge_kwargs = {}
         for k, v in self.merge_kwargs.items():
             if not isinstance(v, (str, list, bool)):
-                _merge_kwargs[k] = pickle.dumps(v)
+                _merge_kwargs[k] = to_serialize(v)
             else:
                 _merge_kwargs[k] = v
 
@@ -685,7 +685,7 @@ class BroadcastJoinLayer(DataFrameLayer):
 
     @classmethod
     def __dask_distributed_unpack__(cls, state, dsk, dependencies):
-        from distributed.worker import dumps_task
+        from distributed.protocol.serialize import to_serialize
 
         # Expand merge_kwargs
         merge_kwargs = state.pop("merge_kwargs", {})
@@ -699,7 +699,7 @@ class BroadcastJoinLayer(DataFrameLayer):
         keys = raw.keys() | dsk.keys()
         deps = {k: keys_in_tasks(keys, [v]) for k, v in raw.items()}
 
-        return {"dsk": toolz.valmap(dumps_task, raw), "deps": deps}
+        return {"dsk": toolz.valmap(to_serialize, raw), "deps": deps}
 
     def _keys_to_parts(self, keys):
         """Simple utility to convert keys to partition indices."""
