@@ -31,8 +31,8 @@ from ..base import DaskMethodsMixin, dont_optimize, is_dask_collection, tokenize
 from ..blockwise import Blockwise, blockwise, subs
 from ..context import globalmethod
 from ..delayed import Delayed, delayed, unpack_collections
-from ..highlevelgraph import HighLevelGraph
-from ..layers import DataFrameBlockwise
+from ..highlevelgraph import HighLevelGraph, MaterializedLayer
+from ..layers import DataFrameBlockwise, MaterializedDataFrameLayer
 from ..optimization import SubgraphCallable
 from ..utils import (
     IndexCallable,
@@ -330,6 +330,14 @@ class _Frame(DaskMethodsMixin, OperatorMethodMixin):
             )
         self._meta = meta
         self.divisions = tuple(divisions)
+
+        # Ensure the final layer of the underlying HLG
+        # is a DataFrameLayer instance
+        final_layer = self.dask.layers.get(self._name, None)
+        if isinstance(final_layer, MaterializedLayer) and not isinstance(
+            final_layer, MaterializedDataFrameLayer
+        ):
+            self.dask.layers[self._name] = MaterializedDataFrameLayer(final_layer)
 
     def __dask_graph__(self):
         return self.dask

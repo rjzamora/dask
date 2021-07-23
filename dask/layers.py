@@ -10,7 +10,7 @@ from tlz.curried import map
 from .base import tokenize
 from .blockwise import Blockwise, BlockwiseDep, BlockwiseDepDict, blockwise_token
 from .core import flatten, keys_in_tasks
-from .highlevelgraph import Layer
+from .highlevelgraph import Layer, MaterializedLayer
 from .utils import apply, concrete, insert, stringify, stringify_collection_keys
 
 #
@@ -349,6 +349,12 @@ class DataFrameLayer(Layer):
     DataFrame-specific attributes that should be
     available on all DataFrame-based HLG Layers.
     """
+
+    pass
+
+
+class MaterializedDataFrameLayer(MaterializedLayer, DataFrameLayer):
+    """DataFrame-Based Materialized Layer"""
 
     pass
 
