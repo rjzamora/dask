@@ -2,7 +2,7 @@ import operator
 from collections import defaultdict
 from functools import partial
 from itertools import product
-from typing import List, Optional, Tuple
+from typing import Any, List, Mapping, Optional, Tuple
 
 import tlz as toolz
 from tlz.curried import map
@@ -350,13 +350,42 @@ class DataFrameLayer(Layer):
     available on all DataFrame-based HLG Layers.
     """
 
-    pass
+    def __init__(
+        self,
+        annotations: Mapping[str, Any] = None,
+        collection_annotations: Mapping[str, Any] = None,
+        columns: List[str] = None,
+        dtypes: Mapping[str, Any] = None,
+        partition_lengths: List[int] = None,
+    ):
+        super().__init__(
+            annotations=annotations,
+            collection_annotations=collection_annotations,
+        )
+        self._columns = columns
+        self._dtypes = dtypes
+        self._partition_lengths = partition_lengths
+
+    def __repr__(self):
+        return "DataFrameLayer<columns={}>".format(self._columns)
 
 
 class MaterializedDataFrameLayer(MaterializedLayer, DataFrameLayer):
     """DataFrame-Based Materialized Layer"""
 
-    pass
+    def __init__(
+        self,
+        mapping: Mapping,
+        annotations: Mapping[str, Any] = None,
+        collection_annotations: Mapping[str, Any] = None,
+        columns: List[str] = None,
+        dtypes: Mapping[str, Any] = None,
+        partition_lengths: List[int] = None,
+    ):
+        super().__init__(mapping, annotations=annotations)
+        self._columns = columns
+        self._dtypes = dtypes
+        self._partition_lengths = partition_lengths
 
 
 class DataFrameBlockwise(Blockwise, DataFrameLayer):
