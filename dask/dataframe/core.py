@@ -32,6 +32,7 @@ from ..blockwise import Blockwise, blockwise, subs
 from ..context import globalmethod
 from ..delayed import Delayed, delayed, unpack_collections
 from ..highlevelgraph import HighLevelGraph
+from ..layers import DataFrameBlockwise
 from ..optimization import SubgraphCallable
 from ..utils import (
     IndexCallable,
@@ -6943,7 +6944,14 @@ def partitionwise_graph(func, name, *args, **kwargs):
         else:
             pairs.extend([arg, None])
     return blockwise(
-        func, name, "i", *pairs, numblocks=numblocks, concatenate=True, **kwargs
+        func,
+        name,
+        "i",
+        *pairs,
+        numblocks=numblocks,
+        concatenate=True,
+        constructor=DataFrameBlockwise,
+        **kwargs,
     )
 
 

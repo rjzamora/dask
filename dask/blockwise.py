@@ -227,6 +227,7 @@ def blockwise(
     concatenate=None,
     new_axes=None,
     dependencies=(),
+    constructor=None,
     **kwargs,
 ):
     """Create a Blockwise symbolic mutable mapping
@@ -294,7 +295,7 @@ def blockwise(
         subgraph = {output: (apply, func, _keys, kwargs2)}
 
     # Construct final output
-    subgraph = Blockwise(
+    subgraph = (constructor or Blockwise)(
         output,
         output_indices,
         subgraph,

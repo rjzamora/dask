@@ -4,8 +4,9 @@ import operator
 import numpy as np
 
 from .. import config, core
-from ..blockwise import Blockwise, fuse_roots, optimize_blockwise
+from ..blockwise import fuse_roots, optimize_blockwise
 from ..highlevelgraph import HighLevelGraph
+from ..layers import DataFrameBlockwise
 from ..optimization import cull, fuse
 from ..utils import ensure_dict
 
@@ -47,18 +48,18 @@ def optimize(dsk, keys, **kwargs):
 
 
 def optimize_dataframe_getitem(dsk, keys):
-    # This optimization looks for all `DataFrameLayer` instances,
+    # This optimization looks for all `DataFrameIOLayer` instances,
     # and calls `project_columns` on any layers that directly precede
     # a (qualified) `getitem` operation. In the future, we can
     # search for `getitem` operations instead, and work backwards
-    # through multiple adjacent `DataFrameLayer`s. This approach
-    # may become beneficial once `DataFrameLayer` is made a base
+    # through multiple adjacent `DataFrameIOLayer`s. This approach
+    # may become beneficial once `DataFrameIOLayer` is made a base
     # type for all relevant DataFrame operations.
 
-    from ..layers import DataFrameLayer
+    from ..layers import DataFrameIOLayer
 
     dataframe_blockwise = [
-        k for k, v in dsk.layers.items() if isinstance(v, DataFrameLayer)
+        k for k, v in dsk.layers.items() if isinstance(v, DataFrameIOLayer)
     ]
 
     layers = dsk.layers.copy()
@@ -80,7 +81,7 @@ def optimize_dataframe_getitem(dsk, keys):
             block = dsk.layers[dep]
 
             # Check if we're a dataframe_blockwise followed by a getitem
-            if not isinstance(block, Blockwise):
+            if not isinstance(block, DataFrameBlockwise):
                 # getitem are Blockwise...
                 return dsk
 
@@ -117,7 +118,7 @@ def optimize_dataframe_getitem(dsk, keys):
                     # (('read-parquet-new', (.,)), ( ... ))
                     new_indices = ((new.name, block.indices[0][1]), block.indices[1])
                     numblocks = {new.name: block.numblocks[old.name]}
-                    new_block = Blockwise(
+                    new_block = DataFrameBlockwise(
                         block.output,
                         block.output_indices,
                         block.dsk,
