@@ -352,16 +352,24 @@ class DataFrameLayer(Layer):
 
     def __init__(
         self,
-        annotations: Mapping[str, Any] = None,
-        collection_annotations: Mapping[str, Any] = None,
+        columns: List[str] = None,
+        dtypes: Mapping[str, Any] = None,
+        partition_lengths: List[int] = None,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self._set_dataframe_attributes(
+            columns=columns,
+            dtypes=dtypes,
+            partition_lengths=partition_lengths,
+        )
+
+    def _set_dataframe_attributes(
+        self,
         columns: List[str] = None,
         dtypes: Mapping[str, Any] = None,
         partition_lengths: List[int] = None,
     ):
-        super().__init__(
-            annotations=annotations,
-            collection_annotations=collection_annotations,
-        )
         self._columns = columns
         self._dtypes = dtypes
         self._partition_lengths = partition_lengths
@@ -375,21 +383,37 @@ class MaterializedDataFrameLayer(MaterializedLayer, DataFrameLayer):
 
     def __init__(
         self,
-        mapping: Mapping,
-        annotations: Mapping[str, Any] = None,
-        collection_annotations: Mapping[str, Any] = None,
+        *args,
         columns: List[str] = None,
         dtypes: Mapping[str, Any] = None,
         partition_lengths: List[int] = None,
+        **kwargs,
     ):
-        super().__init__(mapping, annotations=annotations)
-        self._columns = columns
-        self._dtypes = dtypes
-        self._partition_lengths = partition_lengths
+        super().__init__(*args, **kwargs)
+        self._set_dataframe_attributes(
+            columns=columns,
+            dtypes=dtypes,
+            partition_lengths=partition_lengths,
+        )
 
 
 class DataFrameBlockwise(Blockwise, DataFrameLayer):
     """DataFrame-Based Blockwise Layer"""
+
+    def __init__(
+        self,
+        *args,
+        columns: List[str] = None,
+        dtypes: Mapping[str, Any] = None,
+        partition_lengths: List[int] = None,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self._set_dataframe_attributes(
+            columns=columns,
+            dtypes=dtypes,
+            partition_lengths=partition_lengths,
+        )
 
     def __repr__(self):
         return "DataFrameBlockwise<{} -> {}>".format(self.indices, self.output)
@@ -436,7 +460,11 @@ class SimpleShuffleLayer(DataFrameLayer):
         parts_out=None,
         annotations=None,
     ):
-        super().__init__(annotations=annotations)
+        super().__init__(
+            annotations=annotations,
+            columns=meta_input.columns,
+            dtypes=meta_input.dtypes,
+        )
         self.name = name
         self.column = column
         self.npartitions = npartitions
@@ -1244,6 +1272,7 @@ class DataFrameIOLayer(DataFrameBlockwise):
             indices=[(io_arg_map, "i")],
             numblocks={},
             annotations=annotations,
+            columns=columns,
         )
 
     def project_columns(self, columns):
