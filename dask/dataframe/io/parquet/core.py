@@ -310,7 +310,10 @@ def read_parquet(
             raise ValueError("read_parquet options require gather_statistics=True")
         gather_statistics = True
 
-    read_metadata_result = engine.read_metadata(
+    # Use `plan_read` to process the parquet metadata
+    # and generate a list of information for each read
+    # task (`parts`)
+    read_metadata_result = engine.plan_read(
         fs,
         paths,
         categories=categories,
@@ -323,21 +326,12 @@ def read_parquet(
         aggregate_files=aggregate_files,
         **kwargs,
     )
-
-    # In the future, we may want to give the engine the
-    # option to return a dedicated element for `common_kwargs`.
-    # However, to avoid breaking the API, we just embed this
-    # data in the first element of `parts` for now.
-    # The logic below is inteded to handle backward and forward
-    # compatibility with a user-defined engine.
-    meta, statistics, parts, index = read_metadata_result[:4]
-    common_kwargs = {}
-    aggregation_depth = False
-    if len(parts):
-        # For now, `common_kwargs` and `aggregation_depth`
-        # may be stored in the first element of `parts`
-        common_kwargs = parts[0].pop("common_kwargs", {})
-        aggregation_depth = parts[0].pop("aggregation_depth", aggregation_depth)
+    meta = read_metadata_result.get("meta")
+    statistics = read_metadata_result.get("statistics")
+    parts = read_metadata_result.get("parts")
+    index = read_metadata_result.get("index", index)
+    common_kwargs = read_metadata_result.get("common_kwargs", {})
+    aggregation_depth = read_metadata_result.get("aggregation_depth", False)
 
     # Parse dataset statistics from metadata (if available)
     parts, divisions, index, index_in_columns = process_statistics(

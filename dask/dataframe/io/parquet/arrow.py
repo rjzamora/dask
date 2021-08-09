@@ -509,7 +509,27 @@ class ArrowDatasetEngine(Engine):
     #
 
     @classmethod
-    def read_metadata(
+    def read_metadata(cls, fs, paths, **kwargs):
+        warnings.warn(
+            "Using an ArrowDatasetEngine-derived class where `plan_read` "
+            "is not defined. We will fall back on `read_metadata` for now. "
+            "Please define `plan_read`, since `read_metadata` will be "
+            "removed in a future version of Dask.",
+            FutureWarning,
+        )
+
+        plan_result = cls.plan_read(fs, paths, **kwargs)
+        meta = plan_result["meta"]
+        stats = plan_result["stats"]
+        parts = plan_result["parts"]
+        index = plan_result["index"]
+        if parts:
+            parts[0]["common_kwargs"] = plan_result.get("common_kwargs", {})
+            parts[0]["aggregation_depth"] = plan_result.get("aggregation_depth", {})
+        return (meta, stats, parts, index)
+
+    @classmethod
+    def plan_read(
         cls,
         fs,
         paths,
@@ -573,18 +593,14 @@ class ArrowDatasetEngine(Engine):
             aggregation_depth,
         )
 
-        # Add `common_kwargs` and `aggregation_depth` to the first
-        # element of `parts`. We can return as a separate element
-        # in the future, but should avoid breaking the API for now.
-        if len(parts):
-            parts[0]["common_kwargs"] = common_kwargs
-            parts[0]["aggregation_depth"] = aggregation_depth
-
-        return (meta, stats, parts, index)
-
-    @classmethod
-    def multi_support(cls):
-        return cls == ArrowDatasetEngine
+        return {
+            "meta": meta,
+            "stats": stats,
+            "parts": parts,
+            "index": index,
+            "common_kwargs": common_kwargs,
+            "aggregation_depth": aggregation_depth,
+        }
 
     @classmethod
     def read_partition(
@@ -2160,10 +2176,6 @@ class ArrowLegacyEngine(ArrowDatasetEngine):
             cls._parquet_piece_as_arrow,
             **kwargs,
         )
-
-    @classmethod
-    def multi_support(cls):
-        return cls == ArrowLegacyEngine
 
     @classmethod
     def _get_dataset_offset(cls, path, fs, append, ignore_divisions):
