@@ -60,6 +60,7 @@ from .dispatch import (
     hash_object_dispatch,
     meta_nonempty,
 )
+from .expressions import LeafFrame
 from .optimize import optimize
 from .utils import (
     PANDAS_GT_110,
@@ -314,22 +315,11 @@ class _Frame(DaskMethodsMixin, OperatorMethodMixin):
         Values along which we partition our blocks on the index
     """
 
-    def __init__(self, dsk, name, meta, divisions):
-        if not isinstance(dsk, HighLevelGraph):
-            dsk = HighLevelGraph.from_collections(name, dsk, dependencies=[])
-        self.dask = dsk
-        self._name = name
-        meta = make_meta(meta)
-        if not self._is_partition_type(meta):
-            raise TypeError(
-                "Expected meta to specify type {0}, got type "
-                "{1}".format(type(self).__name__, typename(type(meta)))
-            )
-        self._meta = meta
-        self.divisions = tuple(divisions)
+    def __init__(self, dsk=None, name=None, meta=None, divisions=None, expr=None):
+        self.expr = LeafFrame(dsk, name, meta, divisions) if expr is None else expr
 
     def __dask_graph__(self):
-        return self.dask
+        return self.expr.dask
 
     def __dask_keys__(self):
         return [(self._name, i) for i in range(self.npartitions)]
