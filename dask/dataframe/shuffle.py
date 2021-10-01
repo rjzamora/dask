@@ -4,6 +4,7 @@ import math
 import shutil
 import tempfile
 import uuid
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -18,6 +19,7 @@ from ..utils import M, digit
 from . import methods
 from .core import DataFrame, Series, _Frame, map_partitions, new_dd_object
 from .dispatch import group_split_dispatch, hash_object_dispatch
+from .partitionquantiles import _collapse
 
 logger = logging.getLogger(__name__)
 
@@ -34,11 +36,33 @@ def _calculate_divisions(
     Utility function to calculate divisions for calls to `map_partitions`
     """
     sizes = df.map_partitions(sizeof) if repartition else []
+    saved_dtypes = {}
+    if isinstance(partition_col, DataFrame):
+        # DataFrame input must be convered to a Series,
+        # and the original column dtypes must be saved.
+        saved_dtypes = dict(partition_col.dtypes)
+        partition_col = partition_col.map_partitions(
+            _collapse, meta=(tuple(df.columns), "object")
+        )
     divisions = partition_col._repartition_quantiles(npartitions, upsample=upsample)
     mins = partition_col.map_partitions(M.min)
     maxes = partition_col.map_partitions(M.max)
     divisions, sizes, mins, maxes = base.compute(divisions, sizes, mins, maxes)
-    divisions = methods.tolist(divisions)
+
+    if len(set(saved_dtypes.values())) > 1:
+        # The elements of divisions are tuples, and each
+        # element corresponds to >1 dtypes. These dtypes
+        # may have cahnged in `_repartition_quantiles`
+        # (by numpy), and must be corrected here.
+        divisions = [
+            tuple(
+                saved_dtype.type(tuple_element[i])
+                for i, saved_dtype in enumerate(saved_dtypes.values())
+            )
+            for tuple_element in divisions
+        ]
+    else:
+        divisions = methods.tolist(divisions)
     if type(sizes) is not list:
         sizes = methods.tolist(sizes)
     mins = methods.tolist(mins)
@@ -63,6 +87,7 @@ def _calculate_divisions(
     mins = remove_nans(mins)
     maxes = remove_nans(maxes)
     if pd.api.types.is_categorical_dtype(partition_col.dtype):
+        # TODO: Multi-column sort may not work with cat columns
         dtype = partition_col.dtype
         mins = pd.Categorical(mins, dtype=dtype).codes.tolist()
         maxes = pd.Categorical(maxes, dtype=dtype).codes.tolist()
@@ -88,10 +113,9 @@ def sort_values(
         if isinstance(by, list) and len(by) == 1 and isinstance(by[0], str):
             by = by[0]
         else:
-            raise NotImplementedError(
-                "Dataframe only supports sorting by a single column which must "
-                "be passed as a string or a list of a single string.\n"
-                "You passed %s" % str(by)
+            warnings.warn(
+                "Sorting by multiple columns via temporary tuple conversion. "
+                "This operation may be slow."
             )
     if npartitions == "auto":
         repartition = True
@@ -785,6 +809,9 @@ def collect(p, part, meta, barrier_token):
 
 
 def set_partitions_pre(s, divisions, ascending=True, na_position="last"):
+    if s.ndim > 1:
+        # TODO: Avoid tuples
+        s = pd.Series(list(s.itertuples(index=False, name=None)))
     try:
         if ascending:
             partitions = divisions.searchsorted(s, side="right") - 1

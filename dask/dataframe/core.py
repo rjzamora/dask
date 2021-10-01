@@ -4210,7 +4210,13 @@ class DataFrame(_Frame):
         return self[list(cs)]
 
     def sort_values(
-        self, by, npartitions=None, ascending=True, na_position="last", **kwargs
+        self,
+        by,
+        npartitions=None,
+        ascending=True,
+        na_position="last",
+        full_partitioning=False,
+        **kwargs,
     ):
         """Sort the dataset by a single column.
 
@@ -4229,6 +4235,11 @@ class DataFrame(_Frame):
         na_position: {'last', 'first'}, optional
             Puts NaNs at the beginning if 'first', puts NaN at the end if 'last'.
             Defaults to 'last'.
+        full_partitioning: bool, optional
+            Whether every column specified in ``by`` should be used to perform
+            the output partitioning, or if the first column is sufficient. Due
+            to limitations in Pandas' quantiles and searchsorted, using ``True``
+            may be slow. Default is ``False``.
 
         Examples
         --------
@@ -4236,14 +4247,32 @@ class DataFrame(_Frame):
         """
         from .shuffle import sort_values
 
-        return sort_values(
+        # Check if this is multi-column sort
+        use_by = by
+        multi_phase = False
+        if not full_partitioning and isinstance(by, list) and len(by) > 1:
+            use_by = by[0]
+            multi_phase = True
+
+        # Perform sort
+        result = sort_values(
             self,
-            by,
+            use_by,
             ascending=ascending,
             npartitions=npartitions,
             na_position=na_position,
             **kwargs,
         )
+
+        # Sort within each partition if necessary
+        if multi_phase:
+            return result.map_partitions(
+                M.sort_values,
+                by,
+                ascending=ascending,
+                na_position=na_position,
+            )
+        return result
 
     def set_index(
         self,

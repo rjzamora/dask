@@ -380,6 +380,8 @@ def process_val_weights(vals_and_weights, npartitions, dtype_info):
         rv = pd.DatetimeIndex(rv, dtype=dtype)
     elif rv.dtype != dtype:
         rv = rv.astype(dtype)
+    if rv.ndim > 1:
+        return [tuple(v) for v in rv]
     return rv
 
 
@@ -438,6 +440,14 @@ def dtype_info(df):
         data = df.values
         info = (data.categories, data.ordered)
     return df.dtype, info
+
+
+def _collapse(partition):
+    return pd.Series(
+        list(partition.itertuples(index=False, name=None)),
+        index=partition.index,
+        name=tuple(partition.columns),
+    )
 
 
 def partition_quantiles(df, npartitions, upsample=1.0, random_state=None):
