@@ -1222,7 +1222,7 @@ def test_set_index_nan_partition():
 
 
 @pytest.mark.parametrize("ascending", [True, False])
-@pytest.mark.parametrize("by", ["a", "b"])
+@pytest.mark.parametrize("by", ["a", "b", ["a", "b"]])
 @pytest.mark.parametrize("nelem", [10, 500])
 @pytest.mark.parametrize("nparts", [1, 10])
 def test_sort_values(nelem, nparts, by, ascending):
@@ -1256,6 +1256,29 @@ def test_sort_values_with_nulls(data, by, ascending, na_position):
     ddf = dd.from_pandas(df, npartitions=5)
 
     with dask.config.set(scheduler="single-threaded"):
+        got = ddf.sort_values(by=by, ascending=ascending, na_position=na_position)
+    expect = df.sort_values(by=by, ascending=ascending, na_position=na_position)
+    dd.assert_eq(got, expect, check_index=False)
+
+
+@pytest.mark.parametrize("na_position", ["first", "last"])
+@pytest.mark.parametrize("ascending", [True, False])
+@pytest.mark.parametrize(
+    "data",
+    [
+        {
+            "a": list(range(50)) + [None] * 50 + list(range(50, 100)),
+            "b": [None] * 100 + list(range(100, 150)),
+        },
+        {"a": list(range(15)) + [None] * 5, "b": list(reversed(range(20)))},
+    ],
+)
+def test_sort_values_multi_with_nulls(data, ascending, na_position):
+    df = pd.DataFrame(data)
+    ddf = dd.from_pandas(df, npartitions=5)
+    by = ["a", "b"]
+
+    with pytest.warns(UserWarning):
         got = ddf.sort_values(by=by, ascending=ascending, na_position=na_position)
     expect = df.sort_values(by=by, ascending=ascending, na_position=na_position)
     dd.assert_eq(got, expect, check_index=False)

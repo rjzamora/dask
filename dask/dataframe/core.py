@@ -4254,7 +4254,7 @@ class DataFrame(_Frame):
         # Check if this is multi-column sort
         use_by = by
         multi_phase = False
-        if partitioning == "all" and isinstance(by, list) and len(by) > 1:
+        if partitioning == "first" and isinstance(by, list) and len(by) > 1:
             use_by = by[0]
             multi_phase = True
         elif partitioning not in ("all", "first"):
