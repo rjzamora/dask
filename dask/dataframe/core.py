@@ -4215,7 +4215,7 @@ class DataFrame(_Frame):
         npartitions=None,
         ascending=True,
         na_position="last",
-        full_partitioning=False,
+        partitioning="all",
         **kwargs,
     ):
         """Sort the dataset by a single column.
@@ -4235,11 +4235,15 @@ class DataFrame(_Frame):
         na_position: {'last', 'first'}, optional
             Puts NaNs at the beginning if 'first', puts NaN at the end if 'last'.
             Defaults to 'last'.
-        full_partitioning: bool, optional
-            Whether every column specified in ``by`` should be used to perform
-            the output partitioning, or if the first column is sufficient. Due
-            to limitations in Pandas' quantiles and searchsorted, using ``True``
-            may be slow. Default is ``False``.
+        partitioning: {'all', 'first'}, optional
+            Which columns in ``by`` should be used to perform the output
+            partitioning. Due to limitations in the Pandas ``quantile`` and
+            ``searchsorted`` implementations, the default setting of 'all' may
+            be slow when ``by`` is a multi-column list. In this case, using
+            ``partitioning='first'`` may be significantly faster, but the
+            number of unique values in the first column must be large compared
+            to the number of partitions. Otherwise, the output partitioning
+            may be imbalanced.
 
         Examples
         --------
@@ -4250,9 +4254,14 @@ class DataFrame(_Frame):
         # Check if this is multi-column sort
         use_by = by
         multi_phase = False
-        if not full_partitioning and isinstance(by, list) and len(by) > 1:
+        if partitioning == "all" and isinstance(by, list) and len(by) > 1:
             use_by = by[0]
             multi_phase = True
+        elif partitioning not in ("all", "first"):
+            raise ValueError(
+                f"{partitioning} not a recognized option for `partitioning`. "
+                f"Supported options include 'all' and 'first'."
+            )
 
         # Perform sort
         result = sort_values(
