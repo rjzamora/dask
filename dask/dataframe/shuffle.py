@@ -52,15 +52,18 @@ def _calculate_divisions(
     if len(set(saved_dtypes.values())) > 1:
         # The elements of divisions are tuples, and each
         # element corresponds to >1 dtypes. These dtypes
-        # may have cahnged in `_repartition_quantiles`
+        # may have changed in `_repartition_quantiles`
         # (by numpy), and must be corrected here.
-        divisions = [
-            tuple(
-                saved_dtype.type(tuple_element[i])
-                for i, saved_dtype in enumerate(saved_dtypes.values())
-            )
-            for tuple_element in divisions
-        ]
+        try:
+            divisions = [
+                tuple(
+                    saved_dtype.type(tuple_element[i])
+                    for i, saved_dtype in enumerate(saved_dtypes.values())
+                )
+                for tuple_element in divisions
+            ]
+        except ValueError:
+            divisions = methods.tolist(divisions)
     else:
         divisions = methods.tolist(divisions)
     if type(sizes) is not list:

@@ -1273,12 +1273,14 @@ def test_sort_values_with_nulls(data, by, ascending, na_position):
         {"a": list(range(15)) + [None] * 5, "b": list(reversed(range(20)))},
     ],
 )
-def test_sort_values_multi_with_nulls(data, ascending, na_position):
+def test_sort_values_all_partitioning_with_nulls(data, ascending, na_position):
     df = pd.DataFrame(data)
     ddf = dd.from_pandas(df, npartitions=5)
     by = ["a", "b"]
 
     with pytest.warns(UserWarning):
-        got = ddf.sort_values(by=by, ascending=ascending, na_position=na_position)
+        got = ddf.sort_values(
+            by=by, ascending=ascending, na_position=na_position, partitioning="all"
+        )
     expect = df.sort_values(by=by, ascending=ascending, na_position=na_position)
     dd.assert_eq(got, expect, check_index=False)

@@ -4215,7 +4215,7 @@ class DataFrame(_Frame):
         npartitions=None,
         ascending=True,
         na_position="last",
-        partitioning="all",
+        partitioning="first",
         **kwargs,
     ):
         """Sort the dataset by a single column.
@@ -4238,9 +4238,8 @@ class DataFrame(_Frame):
         partitioning: {'all', 'first'}, optional
             Which columns in ``by`` should be used to perform the output
             partitioning. Due to limitations in the Pandas ``quantile`` and
-            ``searchsorted`` implementations, the default setting of 'all' may
-            be slow when ``by`` is a multi-column list. In this case, using
-            ``partitioning='first'`` may be significantly faster, but the
+            ``searchsorted`` implementations, the default setting of 'first'
+            may be significantly faster than ``partitioning='all'``, but the
             number of unique values in the first column must be large compared
             to the number of partitions. Otherwise, the output partitioning
             may be imbalanced.
