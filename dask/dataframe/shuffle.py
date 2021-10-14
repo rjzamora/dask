@@ -19,7 +19,7 @@ from ..utils import M, digit
 from . import methods
 from .core import DataFrame, Series, _Frame, map_partitions, new_dd_object
 from .dispatch import group_split_dispatch, hash_object_dispatch
-from .partitionquantiles import _collapse
+from .partitionquantiles import quantile_divisions
 
 logger = logging.getLogger(__name__)
 
@@ -37,14 +37,15 @@ def _calculate_divisions(
     """
     sizes = df.map_partitions(sizeof) if repartition else []
     saved_dtypes = {}
-    if isinstance(partition_col, DataFrame):
-        # DataFrame input must be convered to a Series,
-        # and the original column dtypes must be saved.
-        saved_dtypes = dict(partition_col.dtypes)
-        partition_col = partition_col.map_partitions(
-            _collapse, meta=(tuple(df.columns), "object")
-        )
+    # if isinstance(partition_col, DataFrame):
+    #     # DataFrame input must be convered to a Series,
+    #     # and the original column dtypes must be saved.
+    #     saved_dtypes = dict(partition_col.dtypes)
+    #     partition_col = partition_col.map_partitions(
+    #         _collapse, meta=(tuple(df.columns), "object")
+    #     )
     divisions = partition_col._repartition_quantiles(npartitions, upsample=upsample)
+    divisions.compute(scheduler="synchronous")
     mins = partition_col.map_partitions(M.min)
     maxes = partition_col.map_partitions(M.max)
     divisions, sizes, mins, maxes = base.compute(divisions, sizes, mins, maxes)
@@ -106,20 +107,22 @@ def sort_values(
     na_position="last",
     upsample=1.0,
     partition_size=128e6,
+    shuffle=None,
+    ignore_index=None,
     **kwargs,
 ):
     """See DataFrame.sort_values for docstring"""
+
+    # Check null-handling option
     if na_position not in ("first", "last"):
         raise ValueError("na_position must be either 'first' or 'last'")
-    if not isinstance(by, str):
-        # support ["a"] as input
-        if isinstance(by, list) and len(by) == 1 and isinstance(by[0], str):
-            by = by[0]
-        else:
-            warnings.warn(
-                "Sorting by multiple columns via temporary tuple conversion. "
-                "This operation may be slow."
-            )
+
+    # Always convert `by` to list for simplicity
+    if isinstance(by, tuple):
+        by = list(by)
+    elif not isinstance(by, list):
+        by = [by]
+
     if npartitions == "auto":
         repartition = True
         npartitions = max(100, df.npartitions)
@@ -128,42 +131,76 @@ def sort_values(
             npartitions = df.npartitions
         repartition = False
 
-    sort_by_col = df[by]
+    if len(by) > 1:
 
-    divisions, mins, maxes = _calculate_divisions(
-        df, sort_by_col, repartition, npartitions, upsample, partition_size
-    )
+        # Warn user about performance if this is a multi-column sort
+        warnings.warn(
+            "Sorting by multiple columns via temporary tuple conversion. "
+            "This operation may be slow."
+        )
 
-    if (
-        all(not pd.isna(x) for x in divisions)
-        and mins == sorted(mins, reverse=not ascending)
-        and maxes == sorted(maxes, reverse=not ascending)
-        and all(
-            mx < mn
-            for mx, mn in zip(
-                maxes[:-1] if ascending else maxes[1:],
-                mins[1:] if ascending else mins[:-1],
+        divisions = quantile_divisions(df, by, npartitions)
+        import pdb
+
+        pdb.set_trace()
+
+        # .map_partitions(
+        #     _collapse, meta=(tuple(df.columns), "object")
+        # )
+        # divisions = methods.tolist(divisions)
+
+    else:
+        sort_by_col = df[by[0]]
+
+        divisions, mins, maxes = _calculate_divisions(
+            df, sort_by_col, repartition, npartitions, upsample, partition_size
+        )
+
+        if (
+            all(not pd.isna(x) for x in divisions)
+            and mins == sorted(mins, reverse=not ascending)
+            and maxes == sorted(maxes, reverse=not ascending)
+            and all(
+                mx < mn
+                for mx, mn in zip(
+                    maxes[:-1] if ascending else maxes[1:],
+                    mins[1:] if ascending else mins[:-1],
+                )
             )
-        )
-        and npartitions == df.npartitions
-    ):
-        # divisions are in the right place
-        return df.map_partitions(
-            M.sort_values, by, ascending=ascending, na_position=na_position
-        )
+            and npartitions == df.npartitions
+        ):
+            # divisions are in the right place
+            return df.map_partitions(
+                M.sort_values, by, ascending=ascending, na_position=na_position
+            )
 
-    df = rearrange_by_divisions(
-        df,
-        by,
-        divisions,
+    # Assign temporary column with output
+    # partition index for each row
+    meta = df._meta._constructor_sliced([0])
+    partitions = sort_by_col.map_partitions(
+        set_partitions_pre,
+        divisions=divisions,
         ascending=ascending,
         na_position=na_position,
-        duplicates=False,
+        meta=meta,
     )
-    df = df.map_partitions(
+    df2 = df.assign(_partitions=partitions)
+
+    # Perform shuffle
+    df3 = rearrange_by_column(
+        df2,
+        "_partitions",
+        npartitions=len(divisions) - 1,
+        shuffle=shuffle,
+        ignore_index=ignore_index,
+    ).drop(columns=["_partitions"])
+
+    # Return final sorted df
+    df4 = df3.map_partitions(
         M.sort_values, by, ascending=ascending, na_position=na_position
     )
-    return df
+    df4.divisions = divisions
+    return df4
 
 
 def set_index(

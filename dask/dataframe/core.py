@@ -5306,6 +5306,12 @@ class DataFrame(_Frame):
             and key in self.columns
         )
 
+    def _repartition_quantiles(self, npartitions, upsample=1.0):
+        """Approximate quantiles of DataFrame used for repartitioning"""
+        from .partitionquantiles import partition_quantiles
+
+        return partition_quantiles(self, npartitions, upsample=upsample)
+
 
 # bind operators
 for op in [

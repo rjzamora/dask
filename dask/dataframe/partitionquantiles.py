@@ -76,9 +76,13 @@ from pandas.api.types import is_datetime64tz_dtype
 from tlz import merge, merge_sorted, take
 
 from ..base import tokenize
+
+# from ..highlevelgraph import HighLevelGraph
 from ..utils import is_cupy_type, random_state_data
 from .core import Series
 from .utils import is_categorical_dtype
+
+# from collections.abc import Iterator
 
 
 def sample_percentiles(num_old, num_new, chunk_length, upsample=1.0, random_state=None):
@@ -503,3 +507,188 @@ def partition_quantiles(df, npartitions, upsample=1.0, random_state=None):
     dsk = merge(df.dask, dtype_dsk, val_dsk, merge_dsk, last_dsk)
     new_divisions = [0.0, 1.0]
     return return_type(dsk, name3, df._meta, new_divisions)
+
+
+# #
+# #
+# #
+# #
+
+
+# def _quantiles(a, q=[0.5], interpolation="nearest"):
+#     if hasattr(a, "quantiles"):
+#         return a.quantiles(q=q, interpolation=interpolation)
+#     size = len(a)
+#     inds = [min(math.floor(size * _q), size - 1) for _q in q]
+#     result = a.sort_values(list(a.columns), na_position="first").iloc[inds]
+#     result.index = q
+#     return result
+
+
+# def _quantile(a, q):
+#     n = len(a)
+#     if not len(a):
+#         return None, n
+#     return (_quantiles(a, q=q.tolist(), interpolation="nearest"), n)
+
+
+# def merge_quantiles(finalq, qs, vals):
+#     """Combine several quantile calculations of different data.
+#     [NOTE: Same logic as dask.array merge_percentiles]
+#     """
+#     if isinstance(finalq, Iterator):
+#         finalq = list(finalq)
+#     finalq = np.array(finalq)
+#     qs = list(map(list, qs))
+#     vals = list(vals)
+#     vals, Ns = zip(*vals)
+#     Ns = list(Ns)
+
+#     L = list(zip(*[(q, val, N) for q, val, N in zip(qs, vals, Ns) if N]))
+#     if not L:
+#         raise ValueError("No non-trivial arrays found")
+#     qs, vals, Ns = L
+
+#     if len(vals) != len(qs) or len(Ns) != len(qs):
+#         raise ValueError("qs, vals, and Ns parameters must be the same length")
+
+#     # transform qs and Ns into number of observations between quantiles
+#     counts = []
+#     for q, N in zip(qs, Ns):
+#         count = np.empty(len(q))
+#         count[1:] = np.diff(q)
+#         count[0] = q[0]
+#         count *= N
+#         counts.append(count)
+
+#     def _append_counts(val, count):
+#         val["_counts"] = count
+#         return val
+
+#     # Sort by calculated quantile values, then number of observations.
+#     combined_vals_counts = gd.merge_sorted([*map(_append_counts, vals, counts)])
+#     combined_counts = cupy.asnumpy(combined_vals_counts["_counts"].values)
+#     combined_vals = combined_vals_counts.drop(columns=["_counts"])
+
+#     # quantile-like, but scaled by total number of observations
+#     combined_q = np.cumsum(combined_counts)
+
+#     # rescale finalq quantiles to match combined_q
+#     desired_q = finalq * sum(Ns)
+
+#     # TODO: Support other interpolation methods
+#     # For now - Always use "nearest" for interpolation
+#     left = np.searchsorted(combined_q, desired_q, side="left")
+#     right = np.searchsorted(combined_q, desired_q, side="right") - 1
+#     np.minimum(left, len(combined_vals) - 1, left)  # don't exceed max index
+#     lower = np.minimum(left, right)
+#     upper = np.maximum(left, right)
+#     lower_residual = np.abs(combined_q[lower] - desired_q)
+#     upper_residual = np.abs(combined_q[upper] - desired_q)
+#     mask = lower_residual > upper_residual
+#     index = lower  # alias; we no longer need lower
+#     index[mask] = upper[mask]
+#     rv = combined_vals.iloc[index]
+#     return rv.reset_index(drop=True)
+
+
+# def _approximate_quantile(df, q):
+#     """Approximate quantiles of DataFrame or Series.
+#     [NOTE: Same logic as dask.dataframe Series quantile]
+#     """
+#     # current implementation needs q to be sorted so
+#     # sort if array-like, otherwise leave it alone
+#     q_ndarray = np.array(q)
+#     if q_ndarray.ndim > 0:
+#         q_ndarray.sort(kind="mergesort")
+#         q = q_ndarray
+
+#     # Lets assume we are dealing with a DataFrame throughout
+#     if hasattr(df, "to_frame"):
+#         df = df.to_frame()
+#     final_type = df._meta._constructor
+
+#     # Create metadata
+#     meta = _quantiles(df._meta_nonempty, q=q)
+
+#     # Define final action (create df with quantiles as index)
+#     def finalize_tsk(tsk):
+#         return (final_type, tsk)
+
+#     return_type = df.__class__
+
+#     # pandas/cudf uses quantile in [0, 1]
+#     # numpy / cupy uses [0, 100]
+#     qs = np.asarray(q)
+#     token = tokenize(df, qs)
+
+#     if len(qs) == 0:
+#         name = "quantiles-" + token
+#         empty_index = gd.Index([], dtype=float)
+#         return Series(
+#             {
+#                 (name, 0): final_type(
+#                     {col: [] for col in df.columns},
+#                     name=df.name,
+#                     index=empty_index,
+#                 )
+#             },
+#             name,
+#             df._meta,
+#             [None, None],
+#         )
+#     else:
+#         new_divisions = [np.min(q), np.max(q)]
+
+#     name = "quantiles-1-" + token
+#     val_dsk = {
+#         (name, i): (_quantile, key, qs) for i, key in enumerate(df.__dask_keys__())
+#     }
+
+#     name2 = "quantiles-2-" + token
+#     merge_dsk = {
+#         (name2, 0): finalize_tsk(
+#             (merge_quantiles, qs, [qs] * df.npartitions, sorted(val_dsk))
+#         )
+#     }
+#     dsk = merge(val_dsk, merge_dsk)
+#     graph = HighLevelGraph.from_collections(name2, dsk, dependencies=[df])
+#     df = return_type(graph, name2, meta, new_divisions)
+
+#     def set_quantile_index(df):
+#         df.index = q
+#         return df
+
+#     df = df.map_partitions(set_quantile_index, meta=meta)
+#     return df
+
+
+# def quantile_divisions(df, by, npartitions):
+#     qn = np.linspace(0.0, 1.0, npartitions + 1).tolist()
+#     divisions = _approximate_quantile(df[by], qn).compute()
+#     columns = divisions.columns
+
+#     # TODO: Make sure divisions are correct for all dtypes..
+#     if (
+#         len(columns) == 1
+#         and df[columns[0]].dtype != "object"
+#         and not is_categorical_dtype(df[columns[0]].dtype)
+#     ):
+#         dtype = df[columns[0]].dtype
+#         divisions = divisions[columns[0]].astype("int64")
+#         divisions.iloc[-1] += 1
+#         divisions = sorted(
+#             divisions.drop_duplicates().astype(dtype).to_arrow().tolist(),
+#             key=lambda x: (x is None, x),
+#         )
+#     else:
+#         for col in columns:
+#             dtype = df[col].dtype
+#             if dtype != "object":
+#                 divisions[col] = divisions[col].astype("int64")
+#                 divisions[col].iloc[-1] += 1
+#                 divisions[col] = divisions[col].astype(dtype)
+#             else:
+#                 divisions[col].iloc[-1] = chr(ord(divisions[col].iloc[-1][0]) + 1)
+#         divisions = divisions.drop_duplicates()
+#     return divisions
