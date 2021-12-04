@@ -1186,6 +1186,7 @@ class DataFrameIOLayer(Blockwise, DataFrameLayer):
         label=None,
         produces_tasks=False,
         annotations=None,
+        df=None,
     ):
         self.name = name
         self.columns = columns
@@ -1194,6 +1195,7 @@ class DataFrameIOLayer(Blockwise, DataFrameLayer):
         self.label = label
         self.produces_tasks = produces_tasks
         self.annotations = annotations
+        self.df = df
 
         # Define mapping between key index and "part"
         io_arg_map = BlockwiseDepDict(
@@ -1201,14 +1203,22 @@ class DataFrameIOLayer(Blockwise, DataFrameLayer):
             produces_tasks=self.produces_tasks,
         )
 
+        if self.df is None:
+            indices = [(io_arg_map, "i")]
+            numblocks = {}
+            dsk = {self.name: (io_func, blockwise_token(0))}
+        else:
+            indices = [(self.df._name, "i"), (io_arg_map, "i")]
+            numblocks = {self.df._name: (self.df.npartitions,)}
+            dsk = {self.name: (io_func, blockwise_token(0), blockwise_token(1))}
+
         # Use Blockwise initializer
-        dsk = {self.name: (io_func, blockwise_token(0))}
         super().__init__(
             output=self.name,
             output_indices="i",
             dsk=dsk,
-            indices=[(io_arg_map, "i")],
-            numblocks={},
+            indices=indices,
+            numblocks=numblocks,
             annotations=annotations,
         )
 

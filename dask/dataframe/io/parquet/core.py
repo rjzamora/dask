@@ -9,7 +9,7 @@ from packaging.version import parse as parse_version
 
 from ....base import compute_as_if_collection, tokenize
 from ....delayed import Delayed
-from ....highlevelgraph import HighLevelGraph
+from ....highlevelgraph import HighLevelGraph, MaterializedLayer
 from ....layers import DataFrameIOLayer
 from ....utils import apply, import_required, natural_sort_key, parse_bytes
 from ...core import DataFrame, Scalar, new_dd_object
@@ -32,7 +32,7 @@ NONE_LABEL = "__null_dask_index__"
 # User API
 
 
-class ParquetFunctionWrapper:
+class ReadParquetFunctionWrapper:
     """
     Parquet Function-Wrapper Class
     Reads parquet data from disk to produce a partition
@@ -92,6 +92,49 @@ class ParquetFunctionWrapper:
             self.columns,
             self.index,
             self.common_kwargs,
+        )
+
+
+ParquetFunctionWrapper = ReadParquetFunctionWrapper
+
+
+class ToParquetFunctionWrapper:
+    """
+    Parquet Function-Wrapper Class
+    Writes parquet data to disk
+    (given a `part` argument).
+    """
+
+    def __init__(
+        self,
+        engine,
+        path,
+        fs,
+        partition_on,
+        write_metadata_file,
+        kwargs_pass,
+    ):
+        self.engine = engine
+        self.path = path
+        self.fs = fs
+        self.partition_on = partition_on
+        self.write_metadata_file = write_metadata_file
+        self.kwargs_pass = kwargs_pass
+
+    def __call__(self, df, part):
+        d, filename = part
+        return self.engine.write_partition(
+            df,
+            self.path,
+            self.fs,
+            filename,
+            self.partition_on,
+            self.write_metadata_file,
+            **(
+                toolz.merge(self.kwargs_pass, {"head": True})
+                if d == 0
+                else self.kwargs_pass
+            ),
         )
 
 
@@ -710,7 +753,8 @@ def to_parquet(
 
     # Construct IO graph
     dsk = {}
-    name = "to-parquet-" + tokenize(
+    label = "to-parquet-"
+    name = label + tokenize(
         df,
         fs,
         path,
@@ -735,25 +779,28 @@ def to_parquet(
                 "entire dataset unreadable."
             )
         kwargs_pass["custom_metadata"] = custom_metadata
-    for d, filename in enumerate(filenames):
-        dsk[(name, d)] = (
-            apply,
-            engine.write_partition,
-            [
-                (df._name, d),
-                path,
-                fs,
-                filename,
-                partition_on,
-                write_metadata_file,
-            ],
-            toolz.merge(kwargs_pass, {"head": True}) if d == 0 else kwargs_pass,
-        )
-        part_tasks.append((name, d))
 
-    final_name = "metadata-" + name
+    # Create Blockwise layer
+    layer = DataFrameIOLayer(
+        name,
+        None,
+        [(d, filename) for d, filename in enumerate(filenames)],
+        ToParquetFunctionWrapper(
+            engine,
+            path,
+            fs,
+            partition_on,
+            write_metadata_file,
+            kwargs_pass,
+        ),
+        label=label,
+        df=df,
+    )
+
     # Collect metadata and write _metadata
-
+    dsk = {}
+    final_name = "metadata-" + name
+    part_tasks = [(name, d) for d in range(df.npartitions)]
     if write_metadata_file:
         dsk[(final_name, 0)] = (
             apply,
@@ -768,9 +815,22 @@ def to_parquet(
         )
     else:
         dsk[(final_name, 0)] = (lambda x: None, part_tasks)
+    final_layer = MaterializedLayer(dsk)
 
-    graph = HighLevelGraph.from_collections(final_name, dsk, dependencies=[df])
+    # Convert new layers to graph
+    layers = df.dask.layers.copy()
+    dependencies = df.dask.dependencies.copy()
+    if df.dask.key_dependencies:
+        key_dependencies = df.dask.key_dependencies.copy()
+    else:
+        key_dependencies = None
+    layers[name] = layer
+    layers[final_name] = final_layer
+    dependencies[name] = {df._name}
+    dependencies[final_name] = {name}
+    graph = HighLevelGraph(layers, dependencies, key_dependencies=key_dependencies)
 
+    # Return (optionally computed) Scalar collection
     if compute:
         return compute_as_if_collection(
             Scalar, graph, [(final_name, 0)], **compute_kwargs
