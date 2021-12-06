@@ -747,6 +747,58 @@ class ArrowDatasetEngine(Engine):
             with fs.open(metadata_path, "wb") as fil:
                 _meta.write_metadata_file(fil)
 
+    @staticmethod
+    def concatenate_metadata(parts, fmd=None):
+
+        # First, handle output from partition-wise
+        # to_parquet tasks. These will have schema
+        # and metadata output in a nested list.
+        schema = None
+        _meta = fmd
+        if parts and isinstance(parts[0], list):
+            # Convert parts list to metadata list
+            schema = parts[0][0].get("schema", None)
+            parts = [
+                (p[0]["meta"], schema if i == 0 else None)
+                for i, p in enumerate(parts)
+                if p[0]["meta"] is not None
+            ]
+
+        # If there are elements of `parts` left,
+        # they should correspond to (meta, schema)
+        # tuples. Concatenate the row-groups and return
+        if parts:
+            if fmd is not None:
+                i_start = 0
+            else:
+                i_start = 1
+                _meta, schema = parts[0]
+            for i in range(i_start, len(parts)):
+                _append_row_groups(_meta, parts[i][0])
+
+        return (_meta, schema)
+
+    @staticmethod
+    def write_metadata_files(metadata, path=None, fs=None, append=False, **kwargs):
+        if isinstance(metadata, tuple):
+            metadata, schema = metadata
+        else:
+            schema = None
+
+        if schema and not append:
+            # Get only arguments specified in the function
+            common_metadata_path = fs.sep.join([path, "_common_metadata"])
+            keywords = getargspec(pq.write_metadata).args
+            kwargs_meta = {k: v for k, v in kwargs.items() if k in keywords}
+            with fs.open(common_metadata_path, "wb") as fil:
+                pq.write_metadata(schema, fil, **kwargs_meta)
+
+        if metadata:
+            # Write to _metadata file
+            metadata_path = fs.sep.join([path, "_metadata"])
+            with fs.open(metadata_path, "wb") as fil:
+                metadata.write_metadata_file(fil)
+
     #
     # Private Class Methods
     #

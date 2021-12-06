@@ -1,5 +1,6 @@
 import math
 import warnings
+from functools import partial
 
 import tlz as toolz
 from fsspec.core import get_fs_token_paths
@@ -9,9 +10,9 @@ from packaging.version import parse as parse_version
 
 from ....base import compute_as_if_collection, tokenize
 from ....delayed import Delayed
-from ....highlevelgraph import HighLevelGraph, MaterializedLayer
-from ....layers import DataFrameIOLayer
-from ....utils import apply, import_required, natural_sort_key, parse_bytes
+from ....highlevelgraph import HighLevelGraph
+from ....layers import DataFrameIOLayer, DataFrameTreeReduction
+from ....utils import import_required, natural_sort_key, parse_bytes
 from ...core import DataFrame, Scalar, new_dd_object
 from ...methods import concat
 from .utils import _sort_and_analyze_paths
@@ -752,9 +753,8 @@ def to_parquet(
         raise ValueError("``name_function`` must produce unique filenames.")
 
     # Construct IO graph
-    dsk = {}
     label = "to-parquet-"
-    name = label + tokenize(
+    data_name = label + tokenize(
         df,
         fs,
         path,
@@ -765,7 +765,6 @@ def to_parquet(
         index_cols,
         schema,
     )
-    part_tasks = []
     kwargs_pass["fmd"] = meta
     kwargs_pass["compression"] = compression
     kwargs_pass["index_cols"] = index_cols
@@ -780,9 +779,9 @@ def to_parquet(
             )
         kwargs_pass["custom_metadata"] = custom_metadata
 
-    # Create Blockwise layer
-    layer = DataFrameIOLayer(
-        name,
+    # Create Blockwise layer for parquet-data write
+    data_layer = DataFrameIOLayer(
+        data_name,
         None,
         [(d, filename) for d, filename in enumerate(filenames)],
         ToParquetFunctionWrapper(
@@ -797,25 +796,45 @@ def to_parquet(
         df=df,
     )
 
-    # Collect metadata and write _metadata
-    dsk = {}
-    final_name = "metadata-" + name
-    part_tasks = [(name, d) for d in range(df.npartitions)]
+    # dsk = {}
+    # meta_name = "metadata-" + data_name
+    # part_tasks = [(data_name, d) for d in range(df.npartitions)]
+    # if write_metadata_file:
+    #     dsk[(meta_name, 0)] = (
+    #         apply,
+    #         engine.write_metadata,
+    #         [
+    #             part_tasks,
+    #             meta,
+    #             fs,
+    #             path,
+    #         ],
+    #         {"append": append, "compression": compression},
+    #     )
+    # else:
+    #     dsk[(meta_name, 0)] = (lambda x: None, part_tasks)
+    # meta_layer = MaterializedLayer(dsk)
+
+    # Create DataFrameTreeReduction layer for parquet-metadata write
     if write_metadata_file:
-        dsk[(final_name, 0)] = (
-            apply,
-            engine.write_metadata,
-            [
-                part_tasks,
-                meta,
-                fs,
-                path,
-            ],
-            {"append": append, "compression": compression},
+        tree_node_func = partial(engine.concatenate_metadata, fmd=meta)
+        finalize_func = partial(
+            engine.write_metadata_files,
+            path=path,
+            fs=fs,
+            append=append,
         )
     else:
-        dsk[(final_name, 0)] = (lambda x: None, part_tasks)
-    final_layer = MaterializedLayer(dsk)
+        tree_node_func = lambda x: x
+        finalize_func = None
+    meta_name = "metadata-" + data_name
+    meta_layer = DataFrameTreeReduction(
+        meta_name,
+        data_name,
+        df.npartitions,
+        tree_node_func,
+        finalize_func=finalize_func,
+    )
 
     # Convert new layers to graph
     layers = df.dask.layers.copy()
@@ -824,19 +843,19 @@ def to_parquet(
         key_dependencies = df.dask.key_dependencies.copy()
     else:
         key_dependencies = None
-    layers[name] = layer
-    layers[final_name] = final_layer
-    dependencies[name] = {df._name}
-    dependencies[final_name] = {name}
+    layers[data_name] = data_layer
+    layers[meta_name] = meta_layer
+    dependencies[data_name] = {df._name}
+    dependencies[meta_name] = {data_name}
     graph = HighLevelGraph(layers, dependencies, key_dependencies=key_dependencies)
 
     # Return (optionally computed) Scalar collection
     if compute:
         return compute_as_if_collection(
-            Scalar, graph, [(final_name, 0)], **compute_kwargs
+            Scalar, graph, [(meta_name, 0)], **compute_kwargs
         )
     else:
-        return Scalar(graph, final_name, "")
+        return Scalar(graph, meta_name, "")
 
 
 def create_metadata_file(

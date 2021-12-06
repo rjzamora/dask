@@ -1205,3 +1205,28 @@ class FastParquetEngine(Engine):
         # if appending, could skip this, but would need to check existence
         fn = fs.sep.join([path, "_common_metadata"])
         fastparquet.writer.write_common_metadata(fn, _meta, open_with=fs.open)
+
+    @staticmethod
+    def concatenate_metadata(parts, fmd=None):
+        _meta = copy.copy(fmd)
+        if parts:
+            for rg in parts:
+                if rg is not None:
+                    if isinstance(rg, list):
+                        for r in rg:
+                            _meta.row_groups.append(r)
+                    else:
+                        _meta.row_groups.append(rg)
+        return _meta
+
+    @staticmethod
+    def write_metadata_files(metadata, path=None, fs=None, **kwargs):
+        if metadata:
+            fn = fs.sep.join([path, "_metadata"])
+            fastparquet.writer.write_common_metadata(
+                fn, metadata, open_with=fs.open, no_row_groups=False
+            )
+
+            # if appending, could skip this, but would need to check existence
+            fn = fs.sep.join([path, "_common_metadata"])
+            fastparquet.writer.write_common_metadata(fn, metadata, open_with=fs.open)
