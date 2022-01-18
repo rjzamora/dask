@@ -109,6 +109,9 @@ def read_parquet(
     split_row_groups=None,
     chunksize=None,
     aggregate_files=None,
+    dataset_options=None,
+    read_options=None,
+    open_file_options=None,
     **kwargs,
 ):
     """
@@ -162,14 +165,6 @@ def read_parquet(
         data written by dask/fastparquet, not otherwise.
     storage_options : dict, default None
         Key/value pairs to be passed on to the file-system backend, if any.
-    open_file_options : dict, default None
-        Key/value arguments to be passed along to ``AbstractFileSystem.open``
-        when each parquet data file is open for reading. Experimental
-        (optimized) "precaching" for remote file systems (e.g. S3, GCS) can
-        be enabled by adding ``{"method": "parquet"}`` under the
-        ``"precache_options"`` key. Also, a custom file-open function can be
-        used (instead of ``AbstractFileSystem.open``), by specifying the
-        desired function under the ``"open_file_func"`` key.
     engine : str, default 'auto'
         Parquet reader library to use. Options include: 'auto', 'fastparquet',
         'pyarrow', 'pyarrow-dataset', and 'pyarrow-legacy'. Defaults to 'auto',
@@ -242,19 +237,27 @@ def read_parquet(
                 └── └── 04.parquet
 
         Note that the default behavior of ``aggregate_files`` is False.
+    dataset_options : dict, default None
+        Key/value arguments to be passed along to the backend engine for
+        dataset initialization.
+    read_options : dict, default None
+        Key/value arguments to be passed along to the backend engine for
+        parquet data-reading operations.
+    open_file_options : dict, default None
+        Key/value arguments to be passed along to ``AbstractFileSystem.open``
+        when each parquet data file is open for reading. Experimental
+        (optimized) "precaching" for remote file systems (e.g. S3, GCS) can
+        be enabled by adding ``{"method": "parquet"}`` under the
+        ``"precache_options"`` key. Also, a custom file-open function can be
+        used (instead of ``AbstractFileSystem.open``), by specifying the
+        desired function under the ``"open_file_func"`` key.
     **kwargs: dict (of dicts)
-        Passthrough key-word arguments for read backend.
-        The top-level keys correspond to the appropriate operation type, and
-        the second level corresponds to the kwargs that will be passed on to
-        the underlying ``pyarrow`` or ``fastparquet`` function.
-        Supported top-level keys: 'dataset' (for opening a ``pyarrow`` dataset),
-        'file' or 'dataset' (for opening a ``fastparquet.ParquetFile``), 'read'
-        (for the backend read function), 'arrow_to_pandas' (for controlling the
-        arguments passed to convert from a ``pyarrow.Table.to_pandas()``).
-        Any element of kwargs that is not defined under these top-level keys
-        will be passed through to the `engine.read_partitions` classmethod as a
-        stand-alone argument (and will be ignored by the engine implementations
-        defined in ``dask.dataframe``).
+        Other key/value arguments to be passed along to the backend engine.
+        These arguments will be passed to the ``Engine.read_partitions``
+        classmethod. The only option supported by any engine implementation
+        defined in ``dask.dataframe`` is ``arrow_to_pandas``, which can be
+        be used to modify default pyarrow-to-parquet conversion behavior
+        within the pyarrow-based engines.
 
     Examples
     --------
@@ -288,6 +291,9 @@ def read_parquet(
             chunksize=chunksize,
             aggregate_files=aggregate_files,
             metadata_task_size=metadata_task_size,
+            dataset_options=dataset_options,
+            read_options=read_options,
+            open_file_options=open_file_options,
             **kwargs,
         )
         return df[columns]
@@ -310,6 +316,9 @@ def read_parquet(
         split_row_groups,
         chunksize,
         aggregate_files,
+        dataset_options,
+        read_options,
+        open_file_options,
         kwargs,
     )
 
@@ -350,6 +359,9 @@ def read_parquet(
         aggregate_files=aggregate_files,
         ignore_metadata_file=ignore_metadata_file,
         metadata_task_size=metadata_task_size,
+        dataset_options=dataset_options,
+        read_options=read_options,
+        open_file_options=open_file_options,
         **kwargs,
     )
 

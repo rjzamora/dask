@@ -1,4 +1,5 @@
 import re
+import warnings
 
 import pandas as pd
 from fsspec.implementations.local import LocalFileSystem
@@ -20,6 +21,14 @@ class Engine:
         index=None,
         gather_statistics=None,
         filters=None,
+        split_row_groups=None,
+        chunksize=None,
+        aggregate_files=None,
+        ignore_metadata_file=None,
+        metadata_task_size=None,
+        dataset_options=None,
+        read_options=None,
+        open_file_options=None,
         **kwargs,
     ):
         """Gather metadata about a Parquet Dataset to prepare for a read
@@ -44,9 +53,34 @@ class Engine:
             query (cheaply)
         filters: list
             List of filters to apply, like ``[('x', '>', 0), ...]``.
+        split_row_groups : bool or int, default None
+            How parquet row-groups will be mapped onto output partitions.
+        chunksize : int or str, default None
+            The desired size of each output ``DataFrame`` partition in terms
+            of total (uncompressed) parquet storage space.
+        aggregate_files : bool or str, default None
+            Whether distinct file paths may be aggregated into the same
+            output partition.
+        ignore_metadata_file : bool, default False
+            Whether to ignore the global ``_metadata`` file (when one is
+            present).
+        metadata_task_size : int, default configurable
+            If parquet metadata is processed in parallel (see
+            ``ignore_metadata_file`` description above), this argument can
+            be used to specify the number of dataset files to be processed
+            by each task in the Dask graph.
+        dataset_options : dict, default None
+            Key/value arguments to be passed along to the backend engine for
+            dataset initialization.
+        read_options : dict, default None
+            Key/value arguments to be passed along to the backend engine for
+            parquet data-reading operations.
+        open_file_options : dict, default None
+            Key/value arguments to be passed along to file-opening function
+            for remote-parquet data files.
         **kwargs: dict (of dicts)
-            User-specified arguments to pass on to backend.
-            Top level key can be used by engine to select appropriate dict.
+            Other user-specified key/value arguments to pass along to the
+            ``Engine.read_partitions`` classmethod.
 
         Returns
         -------
@@ -75,7 +109,9 @@ class Engine:
         raise NotImplementedError()
 
     @classmethod
-    def read_partition(cls, fs, piece, columns, index, **kwargs):
+    def read_partition(
+        cls, fs, piece, columns, index, dataset_options=None, read_options=None, **kwargs
+    ):
         """Read a single piece of a Parquet dataset into a Pandas DataFrame
 
         This function is called many times in individual tasks
@@ -90,10 +126,15 @@ class Engine:
             List of column names to pull out of that row group
         index: str, List[str], or False
             The index name(s).
+        dataset_options : dict, default None
+            Key/value arguments for dataset initialization.
+        read_options : dict, default None
+            Key/value arguments for parquet data-reading operations. Note
+            that this dictionary may also include ``open_file_options``
+            options (under the "open_file_options" key).
         **kwargs:
-            Includes `"kwargs"` values stored within the `parts` output
-            of `engine.read_metadata`. May also include arguments to be
-            passed to the backend (if stored under a top-level `"read"` key).
+            Other engine-specific options.  Engine implementation should
+            raise an error if unrecognized arguments are specified.
 
         Returns
         -------
@@ -688,3 +729,36 @@ def _set_metadata_task_size(metadata_task_size, fs):
         return config.get(config_str, 0)
 
     return metadata_task_size
+
+def _check_user_options(dataset_options=None, read_options=None, open_file_options=None, **kwargs):
+    # Check user-defined options and kwargs
+    user_kwargs = kwargs.copy()
+    file_kwargs = user_kwargs.pop("file", {})
+    dataset_kwargs = user_kwargs.pop("dataset", {})
+    read_kwargs = user_kwargs.pop("read", {})
+    dataset_options = (dataset_options or {}).copy()
+    read_options = (read_options or {}).copy()
+    if file_kwargs:
+        warnings.warn(
+            "`file` argument is deprecated, please use `dataset_options`",
+            FutureWarning,
+        )
+        dataset_options.update(file_kwargs)
+    if dataset_kwargs:
+        warnings.warn(
+            "`dataset` argument is deprecated, please use `dataset_options`",
+            FutureWarning,
+        )
+        dataset_options.update(dataset_kwargs)
+    if read_kwargs:
+        warnings.warn(
+            "`read` argument is deprecated, please use `read_options`",
+            FutureWarning,
+        )
+        read_options.update(read_kwargs)
+    read_options["open_file_options"] = (open_file_options or {}).copy()
+    return (
+        dataset_options,
+        read_options,
+        user_kwargs,
+    )

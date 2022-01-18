@@ -1112,7 +1112,7 @@ def test_to_parquet_pyarrow_w_inconsistent_schema_by_partition_fails_by_default(
             str(tmpdir),
             engine="pyarrow-legacy",
             gather_statistics=False,
-            dataset={"validate_schema": True},
+            dataset_options={"validate_schema": True},
         ).compute()
         assert e_info.message.contains("ValueError: Schema in partition")
         assert e_info.message.contains("was different")
@@ -2247,7 +2247,7 @@ def test_pyarrow_metadata_nthreads(tmpdir):
     df.index.name = "index"
     ddf = dd.from_pandas(df, npartitions=2)
     ddf.to_parquet(tmp_path, engine="pyarrow")
-    ops = {"dataset": {"metadata_nthreads": 2}}
+    ops = {"dataset_options": {"metadata_nthreads": 2}}
     ddf2 = dd.read_parquet(tmp_path, engine="pyarrow-legacy", **ops)
     assert_eq(ddf, ddf2)
 
@@ -2338,7 +2338,7 @@ def test_timeseries_nulls_in_schema(tmpdir, engine, schema):
     # Note: `append_row_groups` will fail with pyarrow>0.17.1 for _metadata write
     dataset = {"validate_schema": False} if engine == "pyarrow-legacy" else {}
     ddf2.to_parquet(tmp_path, engine=engine, write_metadata_file=False, schema=schema)
-    ddf_read = dd.read_parquet(tmp_path, engine=engine, dataset=dataset)
+    ddf_read = dd.read_parquet(tmp_path, engine=engine, dataset_options=dataset)
 
     assert_eq(ddf_read, ddf2, check_divisions=False, check_index=False)
 
@@ -2379,7 +2379,7 @@ def test_timeseries_nulls_in_schema_pyarrow(tmpdir, timestamp, numerical):
     assert_eq(
         dd.read_parquet(
             tmp_path,
-            dataset={"validate_schema": True},
+            dataset_options={"validate_schema": True},
             index=False,
             engine="pyarrow-legacy",
         ),
@@ -2413,14 +2413,14 @@ def test_read_inconsistent_schema_pyarrow(tmpdir):
 
     # Read Directory
     check = dd.read_parquet(
-        str(tmpdir), dataset={"validate_schema": False}, engine="pyarrow-legacy"
+        str(tmpdir), dataset_options={"validate_schema": False}, engine="pyarrow-legacy"
     )
     assert_eq(check.compute(), df_expect, check_index=False)
 
     # Read List
     check = dd.read_parquet(
         os.path.join(tmpdir, "*.parquet"),
-        dataset={"validate_schema": False},
+        dataset_options={"validate_schema": False},
         engine="pyarrow-legacy",
     )
     assert_eq(check.compute(), df_expect, check_index=False)
@@ -3774,21 +3774,21 @@ def test_extra_file(tmpdir, engine):
 
         # Should Work
         out = dd.read_parquet(
-            tmpdir, engine=engine, dataset={"require_extension": ".parquet"}
+            tmpdir, engine=engine, dataset_options={"require_extension": ".parquet"}
         )
         assert_eq(out, df)
 
         # Should Fail (for not capturing the _SUCCESS and crc files)
         with pytest.raises((OSError, pa.lib.ArrowInvalid)):
             dd.read_parquet(
-                tmpdir, engine=engine, dataset={"require_extension": False}
+                tmpdir, engine=engine, dataset_options={"require_extension": False}
             ).compute()
 
         # Should Fail (for filtering out all files)
         # (Related to: https://github.com/dask/dask/issues/8349)
         with pytest.raises(ValueError):
             dd.read_parquet(
-                tmpdir, engine=engine, dataset={"require_extension": ".foo"}
+                tmpdir, engine=engine, dataset_options={"require_extension": ".foo"}
             ).compute()
 
 

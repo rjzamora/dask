@@ -20,6 +20,7 @@ from ..utils import _get_pyarrow_dtypes, _meta_from_dtypes, _open_input_files
 from .core import create_metadata_file
 from .utils import (
     Engine,
+    _check_user_options,
     _flatten_filters,
     _get_aggregation_depth,
     _normalize_index_columns,
@@ -209,7 +210,7 @@ def _read_table_from_path(
     """
 
     # Define file-opening options
-    read_kwargs = kwargs.get("read", {}).copy()
+    read_kwargs = kwargs.get("read_options", {}).copy()
     open_file_options = read_kwargs.pop("open_file_options", {}).copy()
     precache_options = open_file_options.pop("precache_options", {}).copy()
     if "open_file_func" not in open_file_options:
@@ -246,7 +247,7 @@ def _read_table_from_path(
                     partition_keys=partition_keys,
                     open_file_func=lambda _path, **_kwargs: fil,
                 )
-                arrow_table = piece_to_arrow_func(piece, columns, partitions, **kwargs)
+                arrow_table = piece_to_arrow_func(piece, columns, partitions, **read_kwargs)
                 tables.append(arrow_table)
 
         if len(row_groups) > 1:
@@ -334,21 +335,6 @@ def _need_fragments(filters, partition_keys):
     return bool(filtered_cols - partition_cols)
 
 
-def _split_user_kwargs(kwargs):
-    # Extract "supported" kwargs from `kwargs`.
-    # Split items into `dataset_kwargs` and `read_kwargs`
-    user_kwargs = kwargs.copy()
-    dataset_kwargs = user_kwargs.pop("dataset", {})
-    read_kwargs = user_kwargs.pop("read", {})
-    arrow_to_pandas_kwargs = user_kwargs.pop("arrow_to_pandas", {})
-    if "open_file_options" in user_kwargs:
-        # Allow user to pass "open_file_options"
-        # outside of the "read" kwargs
-        read_kwargs["open_file_options"] = user_kwargs.pop("open_file_options", {})
-
-    return dataset_kwargs, read_kwargs, arrow_to_pandas_kwargs, user_kwargs
-
-
 #
 #  ArrowDatasetEngine
 #
@@ -374,6 +360,9 @@ class ArrowDatasetEngine(Engine):
         aggregate_files=None,
         ignore_metadata_file=False,
         metadata_task_size=0,
+        dataset_options=None,
+        read_options=None,
+        open_file_options=None,
         **kwargs,
     ):
 
@@ -390,6 +379,9 @@ class ArrowDatasetEngine(Engine):
             aggregate_files,
             ignore_metadata_file,
             metadata_task_size,
+            dataset_options,
+            read_options,
+            open_file_options,
             kwargs,
         )
 
@@ -816,6 +808,9 @@ class ArrowDatasetEngine(Engine):
         aggregate_files,
         ignore_metadata_file,
         metadata_task_size,
+        dataset_options,
+        read_options,
+        open_file_options,
         kwargs,
     ):
         """pyarrow.dataset version of _collect_dataset_info
@@ -831,11 +826,15 @@ class ArrowDatasetEngine(Engine):
 
         # Extract "supported" key-word arguments from `kwargs`.
         (
-            _dataset_kwargs,
-            read_kwargs,
-            arrow_to_pandas_kwargs,
+            _dataset_options,
+            read_options,
             user_kwargs,
-        ) = _split_user_kwargs(kwargs)
+        ) = _check_user_options(
+            dataset_options=dataset_options,
+            read_options=read_options,
+            open_file_options=open_file_options,
+            **kwargs,
+        )
 
         # Discover Partitioning - Note that we need to avoid creating
         # this factory until it is actually used.  The `partitioning`
@@ -843,13 +842,13 @@ class ArrowDatasetEngine(Engine):
         # in, containing a `dict` with a required "obj" argument and
         # optional "arg" and "kwarg" elements.  Note that the "obj"
         # value must support the "discover" attribute.
-        partitioning = _dataset_kwargs.pop(
+        partitioning = _dataset_options.pop(
             "partitioning",
             {"obj": pa_ds.HivePartitioning},
         )
 
         # Set require_extension option
-        require_extension = _dataset_kwargs.pop(
+        require_extension = _dataset_options.pop(
             "require_extension", (".parq", ".parquet")
         )
 
@@ -872,7 +871,7 @@ class ArrowDatasetEngine(Engine):
                         *partitioning.get("args", []),
                         **partitioning.get("kwargs", {}),
                     ),
-                    **_dataset_kwargs,
+                    **_dataset_options,
                 )
                 has_metadata_file = True
                 if gather_statistics is None:
@@ -904,7 +903,7 @@ class ArrowDatasetEngine(Engine):
                             *partitioning.get("args", []),
                             **partitioning.get("kwargs", {}),
                         ),
-                        **_dataset_kwargs,
+                        **_dataset_options,
                     )
                     has_metadata_file = True
                     if gather_statistics is None:
@@ -925,7 +924,7 @@ class ArrowDatasetEngine(Engine):
                     *partitioning.get("args", []),
                     **partitioning.get("kwargs", {}),
                 ),
-                **_dataset_kwargs,
+                **_dataset_options,
             )
 
         # At this point, we know if `split_row_groups` should be
@@ -1039,9 +1038,8 @@ class ArrowDatasetEngine(Engine):
             "partitioning": partitioning,
             "metadata_task_size": metadata_task_size,
             "kwargs": {
-                "dataset": _dataset_kwargs,
-                "read": read_kwargs,
-                "arrow_to_pandas": arrow_to_pandas_kwargs,
+                "dataset_options": _dataset_options,
+                "read_options": read_options,
                 **user_kwargs,
             },
         }
@@ -1581,7 +1579,7 @@ class ArrowDatasetEngine(Engine):
                         *partitioning.get("args", []),
                         **partitioning.get("kwargs", {}),
                     ),
-                    **kwargs.get("dataset", {}),
+                    **kwargs.get("dataset_options", {}),
                 )
                 frags = list(ds.get_fragments())
                 assert len(frags) == 1
@@ -1665,7 +1663,7 @@ class ArrowDatasetEngine(Engine):
             partitions=partitions,
             use_pandas_metadata=True,
             use_threads=False,
-            **kwargs.get("read", {}),
+            **kwargs.get("read_options", {}),
         )
         return arrow_table
 
@@ -1769,6 +1767,9 @@ class ArrowLegacyEngine(ArrowDatasetEngine):
         aggregate_files,
         ignore_metadata_file,
         metadata_task_size,
+        dataset_options,
+        read_options,
+        open_file_options,
         kwargs,
     ):
         """pyarrow-legacy version of _collect_dataset_info
@@ -1786,11 +1787,15 @@ class ArrowLegacyEngine(ArrowDatasetEngine):
 
         # Extract "supported" key-word arguments from `kwargs`.
         (
-            dataset_kwargs,
-            read_kwargs,
-            arrow_to_pandas_kwargs,
+            dataset_options,
+            read_options,
             user_kwargs,
-        ) = _split_user_kwargs(kwargs)
+        ) = _check_user_options(
+            dataset_options=dataset_options,
+            read_options=read_options,
+            open_file_options=open_file_options,
+            **kwargs,
+        )
 
         (
             schema,
@@ -1806,7 +1811,7 @@ class ArrowLegacyEngine(ArrowDatasetEngine):
             gather_statistics,
             filters,
             index,
-            dataset_kwargs,
+            dataset_options,
         )
 
         # Check the `aggregate_files` setting
@@ -1832,9 +1837,8 @@ class ArrowLegacyEngine(ArrowDatasetEngine):
             "partition_names": partition_info["partition_names"],
             "partitions": partition_info["partitions"],
             "kwargs": {
-                "dataset": dataset_kwargs,
-                "read": read_kwargs,
-                "arrow_to_pandas": arrow_to_pandas_kwargs,
+                "dataset_options": dataset_options,
+                "read_options": read_options,
                 **user_kwargs,
             },
         }
