@@ -77,7 +77,9 @@ class Engine:
             parquet data-reading operations.
         open_file_options : dict, default None
             Key/value arguments to be passed along to file-opening function
-            for remote-parquet data files.
+            for remote-parquet data files. Note that these options are
+            typically copied into the ``read_options`` dictionary by the
+            engine.
         **kwargs: dict (of dicts)
             Other user-specified key/value arguments to pass along to the
             ``Engine.read_partitions`` classmethod.
@@ -110,7 +112,14 @@ class Engine:
 
     @classmethod
     def read_partition(
-        cls, fs, piece, columns, index, dataset_options=None, read_options=None, **kwargs
+        cls,
+        fs,
+        piece,
+        columns,
+        index,
+        dataset_options=None,
+        read_options=None,
+        **kwargs,
     ):
         """Read a single piece of a Parquet dataset into a Pandas DataFrame
 
@@ -730,7 +739,10 @@ def _set_metadata_task_size(metadata_task_size, fs):
 
     return metadata_task_size
 
-def _check_user_options(dataset_options=None, read_options=None, open_file_options=None, **kwargs):
+
+def _check_user_options(
+    dataset_options=None, read_options=None, open_file_options=None, **kwargs
+):
     # Check user-defined options and kwargs
     user_kwargs = kwargs.copy()
     file_kwargs = user_kwargs.pop("file", {})
