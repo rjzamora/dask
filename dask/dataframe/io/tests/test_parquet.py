@@ -8,6 +8,7 @@ from decimal import Decimal
 import numpy as np
 import pandas as pd
 import pytest
+from fsspec.implementations.local import LocalFileSystem
 from packaging.version import parse as parse_version
 
 import dask
@@ -3918,3 +3919,35 @@ def test_custom_filename_with_partition(tmpdir, engine):
     assert_eq(
         pdf, actual, check_index=False, check_dtype=False, check_categorical=False
     )
+
+
+@FASTPARQUET_MARK
+def test_fastparquet_dataset_options(tmpdir):
+    df = pd.DataFrame(
+        {
+            "a": np.random.choice(["A", "B", "C"], size=100),
+            "b": np.random.random(size=100),
+            "c": np.random.randint(1, 5, size=100),
+        }
+    )
+    d = dd.from_pandas(df, npartitions=2)
+    d.to_parquet(tmpdir, engine="fastparquet")
+
+    # Using `dataset=` is deprecated and should
+    # raise a FutureWarning
+    dataset_options = {"fs": LocalFileSystem()}
+    with pytest.warns(FutureWarning):
+        df2 = dd.read_parquet(
+            tmpdir,
+            dataset=dataset_options,
+            engine="fastparquet",
+        ).compute(scheduler="synchronous")
+    assert_eq(df, df2)
+
+    # Using `dataset_options=` should not warn
+    ddf2 = dd.read_parquet(
+        tmpdir,
+        dataset_options=dataset_options,
+        engine="fastparquet",
+    )
+    assert_eq(df2, ddf2)

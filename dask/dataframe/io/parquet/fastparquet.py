@@ -389,11 +389,7 @@ class FastParquetEngine(Engine):
 
         # Extract "supported" key-word arguments from `kwargs`.
         # Split items into `dataset_kwargs` and `read_kwargs`
-        (
-            dataset_kwargs,
-            read_kwargs,
-            user_kwargs,
-        ) = _check_user_options(
+        (dataset_kwargs, read_kwargs, user_kwargs,) = _check_user_options(
             dataset_options=dataset_options,
             read_options=read_options,
             open_file_options=open_file_options,
@@ -430,10 +426,11 @@ class FastParquetEngine(Engine):
                 _metadata_exists = False
             if _metadata_exists:
                 # Using _metadata file (best-case scenario)
+                _dataset_kwargs = {"open_with": fs.open}
+                _dataset_kwargs.update(dataset_kwargs)
                 pf = ParquetFile(
                     fs.sep.join([base, "_metadata"]),
-                    open_with=fs.open,
-                    **dataset_kwargs,
+                    **_dataset_kwargs,
                 )
                 if gather_statistics is None:
                     gather_statistics = True
@@ -450,9 +447,9 @@ class FastParquetEngine(Engine):
                             "No files satisfy the `require_extension` criteria "
                             f"(files must end with {require_extension})."
                         )
-                pf = ParquetFile(
-                    paths[:1], open_with=fs.open, root=base, **dataset_kwargs
-                )
+                _dataset_kwargs = {"open_with": fs.open, "root": base}
+                _dataset_kwargs.update(dataset_kwargs)
+                pf = ParquetFile(paths[:1], **_dataset_kwargs)
                 scheme = get_file_scheme(fns)
                 pf.file_scheme = scheme
                 pf.cats = paths_to_cats(fns, scheme)
@@ -472,18 +469,16 @@ class FastParquetEngine(Engine):
 
             if _metadata_exists:
                 # We have a _metadata file, lets use it
-                pf = ParquetFile(
-                    fs.sep.join([base, "_metadata"]),
-                    open_with=fs.open,
-                    **dataset_kwargs,
-                )
+                _dataset_kwargs = {"open_with": fs.open}
+                _dataset_kwargs.update(dataset_kwargs)
+                pf = ParquetFile(fs.sep.join([base, "_metadata"]), **_dataset_kwargs)
             else:
                 # Rely on metadata for 0th file.
                 # Will need to pass a list of paths to read_partition
+                _dataset_kwargs = {"open_with": fs.open, "root": base}
+                _dataset_kwargs.update(dataset_kwargs)
                 scheme = get_file_scheme(fns)
-                pf = ParquetFile(
-                    paths[:1], open_with=fs.open, root=base, **dataset_kwargs
-                )
+                pf = ParquetFile(paths[:1], **_dataset_kwargs)
                 pf.file_scheme = scheme
                 pf.cats = paths_to_cats(fns, scheme)
                 if not gather_statistics:
@@ -729,6 +724,7 @@ class FastParquetEngine(Engine):
             "root_file_scheme": pf.file_scheme,
             "base_path": "" if base_path is None else base_path,
             "has_metadata_file": has_metadata_file,
+            "dataset_options": kwargs.get("dataset_options", {}),
         }
 
         if (
@@ -795,15 +791,17 @@ class FastParquetEngine(Engine):
         root_cats = dataset_info_kwargs.get("root_cats", None)
         root_file_scheme = dataset_info_kwargs.get("root_file_scheme", None)
         has_metadata_file = dataset_info_kwargs["has_metadata_file"]
+        dataset_options = dataset_info_kwargs["dataset_options"]
 
         # Get ParquetFile
         if not isinstance(pf_or_files, fastparquet.api.ParquetFile):
             # Construct local `ParquetFile` object
-            pf = ParquetFile(
-                pf_or_files,
-                open_with=fs.open,
-                root=base_path,
-            )
+            _dataset_options = {
+                "open_with": fs.open,
+                "root": base_path,
+            }
+            _dataset_options.update(dataset_options)
+            pf = ParquetFile(pf_or_files, **_dataset_options)
             # Update hive-partitioning to match global cats/scheme
             pf.cats = root_cats or {}
             if root_cats:
@@ -970,11 +968,14 @@ class FastParquetEngine(Engine):
 
                 row_groups = []
                 rg_offset = 0
+                _dataset_kwargs = {
+                    "open_with": fs.open,
+                    "root": base_path or False,
+                }
+                _dataset_kwargs.update(kwargs.get("dataset_options", {}).copy())
                 parquet_file = ParquetFile(
                     [p[0] for p in pieces],
-                    open_with=fs.open,
-                    root=base_path or False,
-                    **kwargs.get("dataset_options", {}),
+                    **_dataset_kwargs,
                 )
                 for piece in pieces:
                     _pf = (
@@ -982,9 +983,7 @@ class FastParquetEngine(Engine):
                         if len(pieces) == 1
                         else ParquetFile(
                             piece[0],
-                            open_with=fs.open,
-                            root=base_path or False,
-                            **kwargs.get("dataset_options", {}),
+                            **_dataset_kwargs,
                         )
                     )
                     n_local_row_groups = len(_pf.row_groups)
