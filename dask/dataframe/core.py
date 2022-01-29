@@ -5893,6 +5893,7 @@ def apply_concat_apply(
             split_out_setup_kwargs,
             ignore_index,
             token="split-%s" % token_key,
+            emulate_nonempty_meta=False,
             enforce_metadata=False,
             transform_divisions=False,
             align_dataframes=False,
@@ -5966,13 +5967,13 @@ def _extract_meta(x, nonempty=False):
         return x
 
 
-def _emulate(func, *args, udf=False, **kwargs):
+def _emulate(func, *args, udf=False, nonempty=True, **kwargs):
     """
     Apply a function using args / kwargs. If arguments contain dd.DataFrame /
     dd.Series, using internal cache (``_meta``) for calculation
     """
     with raise_on_meta_error(funcname(func), udf=udf):
-        return func(*_extract_meta(args, True), **_extract_meta(kwargs, True))
+        return func(*_extract_meta(args, nonempty), **_extract_meta(kwargs, nonempty))
 
 
 @insert_meta_param_description
@@ -5980,6 +5981,7 @@ def map_partitions(
     func,
     *args,
     meta=no_default,
+    emulate_nonempty_meta=True,
     enforce_metadata=True,
     transform_divisions=True,
     align_dataframes=True,
@@ -5997,6 +5999,9 @@ def map_partitions(
         ``Scalar``, ``Delayed`` or regular python objects. DataFrame-like args
         (both dask and pandas) will be repartitioned to align (if necessary)
         before applying the function (see ``align_dataframes`` to control).
+    emulate_nonempty_meta : bool, default True
+        Whether to use nonempty metadata for metadata emulation. Only
+        used when ``meta`` is not explicitly specified. Default is ``True``.
     enforce_metadata : bool, default True
         Whether to enforce at runtime that the structure of the DataFrame
         produced by ``func`` actually matches the structure of ``meta``.
@@ -6041,7 +6046,7 @@ def map_partitions(
     if meta is no_default:
         # Use non-normalized kwargs here, as we want the real values (not
         # delayed values)
-        meta = _emulate(func, *args, udf=True, **kwargs)
+        meta = _emulate(func, *args, udf=True, nonempty=emulate_nonempty_meta, **kwargs)
         meta_is_emulated = True
     else:
         meta = make_meta(meta, index=meta_index, parent_meta=parent_meta)
