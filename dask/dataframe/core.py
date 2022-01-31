@@ -48,6 +48,7 @@ from ..utils import (
 )
 from ..widgets import get_template
 from . import methods
+from ._compat import PANDAS_GT_140
 from .accessor import DatetimeAccessor, StringAccessor
 from .categorical import CategoricalAccessor, categorize
 from .dispatch import (
@@ -1500,10 +1501,12 @@ Dask Name: {name}, {task} tasks"""
 
     @derived_from(pd.DataFrame)
     def replace(self, to_replace=None, value=None, regex=False):
+        # In PANDAS_GT_140 pandas starts using no_default instead of None
+        value_kwarg = {"value": value} if value is not None else {}
         return self.map_partitions(
             M.replace,
             to_replace=to_replace,
-            value=value,
+            **value_kwarg,
             regex=regex,
             enforce_metadata=False,
         )
@@ -1970,6 +1973,7 @@ Dask Name: {name}, {task} tasks"""
             chunk_kwargs={"dropna": dropna},
             aggregate_kwargs={"dropna": dropna},
         )
+        mode_series.name = self.name
         return mode_series
 
     @_numeric_only
@@ -2911,6 +2915,12 @@ Dask Name: {name}, {task} tasks"""
 
     @derived_from(pd.Series)
     def append(self, other, interleave_partitions=False):
+        if PANDAS_GT_140:
+            warnings.warn(
+                "The frame.append method is deprecated and will be removed from"
+                "dask in a future version. Use dask.dataframe.concat instead.",
+                FutureWarning,
+            )
         # because DataFrame.append will override the method,
         # wrap by pd.Series.append docstring
         from .multi import concat
@@ -5181,7 +5191,6 @@ class DataFrame(_Frame):
             mode_series = Series.mode(
                 col_series, dropna=dropna, split_every=split_every
             )
-            mode_series.name = col_series.name
             mode_series_list.append(mode_series)
 
         name = "concat-" + tokenize(*mode_series_list)
@@ -6033,8 +6042,10 @@ def map_partitions(
         # Use non-normalized kwargs here, as we want the real values (not
         # delayed values)
         meta = _emulate(func, *args, udf=True, **kwargs)
+        meta_is_emulated = True
     else:
         meta = make_meta(meta, index=meta_index, parent_meta=parent_meta)
+        meta_is_emulated = False
 
     if all(isinstance(arg, Scalar) for arg in args):
         layer = {
@@ -6043,6 +6054,13 @@ def map_partitions(
         graph = HighLevelGraph.from_collections(name, layer, dependencies=args)
         return Scalar(graph, name, meta)
     elif not (has_parallel_type(meta) or is_arraylike(meta) and meta.shape):
+        if not meta_is_emulated:
+            warnings.warn(
+                "Meta is not valid, `map_partitions` expects output to be a pandas object. "
+                "Try passing a pandas object as meta or a dict or tuple representing the "
+                "(name, dtype) of the columns. In the future the meta you passed will not work.",
+                FutureWarning,
+            )
         # If `meta` is not a pandas object, the concatenated results will be a
         # different type
         meta = make_meta(_concat([meta]), index=meta_index)

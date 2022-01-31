@@ -16,7 +16,7 @@ import dask.dataframe.groupby
 from dask.base import compute_as_if_collection
 from dask.blockwise import fuse_roots
 from dask.dataframe import _compat, methods
-from dask.dataframe._compat import PANDAS_GT_110, PANDAS_GT_120, tm
+from dask.dataframe._compat import PANDAS_GT_110, PANDAS_GT_120, PANDAS_GT_140, tm
 from dask.dataframe.core import (
     Scalar,
     _concat,
@@ -3005,6 +3005,16 @@ def test_apply_warns():
     assert "int64" in str(w[0].message)
 
 
+def test_apply_warns_with_invalid_meta():
+    df = pd.DataFrame({"x": [1, 2, 3, 4], "y": [10, 20, 30, 40]})
+    ddf = dd.from_pandas(df, npartitions=2)
+
+    func = lambda row: row["x"] + row["y"]
+
+    with pytest.warns(FutureWarning, match="Meta is not valid"):
+        ddf.apply(func, axis=1, meta=int)
+
+
 def test_applymap():
     df = pd.DataFrame({"x": [1, 2, 3, 4], "y": [10, 20, 30, 40]})
     ddf = dd.from_pandas(df, npartitions=2)
@@ -4164,7 +4174,8 @@ def test_dataframe_mode():
     ddf = dd.from_pandas(df, npartitions=3)
 
     assert_eq(ddf.mode(), df.mode())
-    assert_eq(ddf.Name.mode(), df.Name.mode())
+    # name is not preserved in older pandas
+    assert_eq(ddf.Name.mode(), df.Name.mode(), check_names=PANDAS_GT_140)
 
     # test empty
     df = pd.DataFrame(columns=["a", "b"])
