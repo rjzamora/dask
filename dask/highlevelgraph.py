@@ -598,7 +598,7 @@ class AbstractLayer(Layer):
         this parameter.
         """
         output_blocks = self._keys_to_indices(keys)
-        if output_blocks != set(self.output_blocks):
+        if output_blocks != set(self.output_blocks or []):
             new_state = self.layer_state.copy()
             new_state["output_blocks"] = output_blocks
             new_state["annotations"] = self.annotations
@@ -656,7 +656,7 @@ class AbstractLayer(Layer):
         return iter(self._dict)
 
     def __len__(self):
-        return iter(self._dict)
+        return len(self._dict)
 
     def __dask_distributed_pack__(self, all_hlg_keys, *args, **kwargs):
         # from distributed.protocol.serialize import ToPickle

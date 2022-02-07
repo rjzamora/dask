@@ -13,7 +13,7 @@ from tlz.curried import map
 from .base import tokenize
 from .blockwise import Blockwise, BlockwiseDep, BlockwiseDepDict, blockwise_token
 from .core import flatten
-from .highlevelgraph import AbstractLayer, Layer
+from .highlevelgraph import AbstractLayer
 from .utils import apply, cached_cumsum, concrete, insert, stringify
 
 #
@@ -84,7 +84,7 @@ class ArraySliceDep(ArrayBlockwiseDep):
         return tuple(slice(*s, None) for s in loc)
 
 
-class ArrayOverlapLayer(Layer):
+class ArrayOverlapLayer(AbstractLayer):
     """Simple HighLevelGraph array overlap layer.
 
     Lazily computed High-level graph layer for a array overlap operations.
@@ -102,59 +102,113 @@ class ArrayOverlapLayer(Layer):
     def __init__(
         self,
         name,
+        input_name,
         axes,
         chunks,
         numblocks,
-        token,
+        output_blocks=None,
+        annotations=None,
     ):
-        super().__init__()
+        super().__init__(annotations=annotations)
         self.name = name
+        self.input_name = input_name
         self.axes = axes
         self.chunks = chunks
         self.numblocks = numblocks
-        self.token = token
+        self.output_blocks = output_blocks
+        self.getitem_name = "getitem-" + self.name
         self._cached_keys = None
 
     def __repr__(self):
         return f"ArrayOverlapLayer<name='{self.name}'"
 
     @property
-    def _dict(self):
-        """Materialize full dict representation"""
-        if hasattr(self, "_cached_dict"):
-            return self._cached_dict
-        else:
-            dsk = self._construct_graph()
-            self._cached_dict = dsk
-        return self._cached_dict
+    def layer_state(self):
+        return {
+            "name": self.name,
+            "input_name": self.input_name,
+            "axes": self.axes,
+            "chunks": self.chunks,
+            "numblocks": self.numblocks,
+            "output_blocks": self.output_blocks,
+        }
 
-    def __getitem__(self, key):
-        return self._dict[key]
+    def _tuples(self, indices):
+        return [k if isinstance(k, tuple) else (k,) for k in indices]
 
-    def __iter__(self):
-        return iter(self._dict)
+    def layer_dependencies(self, keys, output_blocks=None):
+        # Start with interior keys.
+        # We use `output_blocks` if available (from culling).
+        interior_keys = output_blocks or self.output_blocks
+        interior_keys = interior_keys or self._keys_to_indices(keys)
 
-    def __len__(self):
-        return len(self._dict)
-
-    def is_materialized(self):
-        return hasattr(self, "_cached_dict")
+        input_deps = {}
+        input_name = self.input_name  # Input-collection name
+        for k in self._tuples(interior_keys):
+            if (input_name,) + k == fractional_slice((input_name,) + k, self.axes):
+                # This is an output block.
+                # Use the list of getitem deps, but use the
+                # input-collection name
+                input_deps[(self.name,) + k] = set(
+                    self._expand_key_func((None,) + k, name=input_name)
+                )
+        return input_deps
 
     def get_output_keys(self):
-        return self.keys()  # FIXME! this implementation materializes the graph
+        # Start with interior keys.
+        # We use `output_blocks` if available (from culling).
+        interior_keys = self.output_blocks or self._get_interior_keys()
+
+        output_keys = set()
+        input_name = self.input_name  # Input-collection name
+        for k in self._tuples(interior_keys):
+            if (input_name,) + k == fractional_slice((input_name,) + k, self.axes):
+                # This is an output block
+                output_keys.add((self.name,) + k)
+        return output_keys
+
+    def construct_graph(self):
+        """Construct graph for a simple overlap operation."""
+        axes = self.axes
+        input_name = self.input_name
+
+        # Use CallableLazyImport objects to avoid importing dataframe
+        # module on the scheduler
+        concatenate3 = CallableLazyImport("dask.array.core.concatenate3")
+
+        # Make keys for each of the surrounding sub-arrays
+        interior_slices = {}
+        overlap_blocks = {}
+        interior_keys = self.output_blocks or self._get_interior_keys()
+        for k in self._tuples(interior_keys):
+            frac_slice = fractional_slice((input_name,) + k, axes)
+            if (input_name,) + k != frac_slice:
+                interior_slices[(self.getitem_name,) + k] = frac_slice
+            else:
+                interior_slices[(self.getitem_name,) + k] = (input_name,) + k
+                overlap_blocks[(self.name,) + k] = (
+                    concatenate3,
+                    (
+                        concrete,
+                        self._expand_key_func((None,) + k, name=self.getitem_name),
+                    ),
+                )
+
+        dsk = toolz.merge(interior_slices, overlap_blocks)
+        return dsk
 
     def _dask_keys(self):
         if self._cached_keys is not None:
             return self._cached_keys
 
-        name, chunks, numblocks = self.name, self.chunks, self.numblocks
+        input_name, chunks, numblocks = self.input_name, self.chunks, self.numblocks
 
         def keys(*args):
             if not chunks:
-                return [(name,)]
+                return [(input_name,)]
             ind = len(args)
             if ind + 1 == len(numblocks):
-                result = [(name,) + args + (i,) for i in range(numblocks[ind])]
+                result = [(input_name,) + args + (i,) for i in range(numblocks[ind])]
             else:
                 result = [keys(*(args + (i,))) for i in range(numblocks[ind])]
             return result
@@ -162,48 +216,26 @@ class ArrayOverlapLayer(Layer):
         self._cached_keys = result = keys()
         return result
 
-    def _construct_graph(self, deserializing=False):
-        """Construct graph for a simple overlap operation."""
-        axes = self.axes
-        chunks = self.chunks
-        name = self.name
-        dask_keys = self._dask_keys()
-
-        getitem_name = "getitem-" + self.token
-        overlap_name = "overlap-" + self.token
-
-        if deserializing:
-            # Use CallableLazyImport objects to avoid importing dataframe
-            # module on the scheduler
-            concatenate3 = CallableLazyImport("dask.array.core.concatenate3")
-        else:
-            # Not running on distributed scheduler - Use explicit functions
-            from dask.array.core import concatenate3
-
-        dims = list(map(len, chunks))
-        expand_key2 = functools.partial(
-            _expand_keys_around_center, dims=dims, axes=axes
+    @property
+    def _expand_key_func(self):
+        return functools.partial(
+            _expand_keys_around_center,
+            dims=list(map(len, self.chunks)),
+            axes=self.axes,
         )
+
+    def _get_interior_keys(self):
+        """Get interior keys"""
 
         # Make keys for each of the surrounding sub-arrays
-        interior_keys = toolz.pipe(
-            dask_keys, flatten, map(expand_key2), map(flatten), toolz.concat, list
+        return toolz.pipe(
+            self._dask_keys(),
+            flatten,
+            map(self._expand_key_func),
+            map(flatten),
+            toolz.concat,
+            list,
         )
-        interior_slices = {}
-        overlap_blocks = {}
-        for k in interior_keys:
-            frac_slice = fractional_slice((name,) + k, axes)
-            if (name,) + k != frac_slice:
-                interior_slices[(getitem_name,) + k] = frac_slice
-            else:
-                interior_slices[(getitem_name,) + k] = (name,) + k
-                overlap_blocks[(overlap_name,) + k] = (
-                    concatenate3,
-                    (concrete, expand_key2((None,) + k, name=getitem_name)),
-                )
-
-        dsk = toolz.merge(interior_slices, overlap_blocks)
-        return dsk
 
 
 def _expand_keys_around_center(k, dims, name=None, axes=None):

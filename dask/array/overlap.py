@@ -52,15 +52,13 @@ def overlap_internal(x, axes):
     The axes input informs how many cells to overlap between neighboring blocks
     {0: 2, 2: 5} means share two cells in 0 axis, 5 cells in 2 axis
     """
-    token = tokenize(x, axes)
-    name = "overlap-" + token
-
+    name = "overlap-" + tokenize(x, axes)
     graph = ArrayOverlapLayer(
-        name=x.name,
+        name=name,
+        input_name=x.name,
         axes=axes,
         chunks=x.chunks,
         numblocks=x.numblocks,
-        token=token,
     )
     graph = HighLevelGraph.from_collections(name, graph, dependencies=[x])
     chunks = _overlap_internal_chunks(x.chunks, axes)
