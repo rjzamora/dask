@@ -18,7 +18,7 @@ from dask.dataframe.io.utils import DataFrameIOFunction, _is_local_fs
 from dask.dataframe.methods import concat
 from dask.delayed import Delayed
 from dask.highlevelgraph import HighLevelGraph
-from dask.utils import apply, import_required, natural_sort_key, parse_bytes
+from dask.utils import apply, import_required, parse_bytes
 
 __all__ = ("read_parquet", "to_parquet")
 
@@ -168,6 +168,7 @@ def read_parquet(
     filters=None,
     categories=None,
     index=None,
+    filesystem=None,
     storage_options=None,
     engine="auto",
     calculate_divisions=None,
@@ -228,6 +229,7 @@ def read_parquet(
         If a list, assumes up to 2**16-1 labels; if a dict, specify the number
         of labels expected; if None, will load categories automatically for
         data written by dask/fastparquet, not otherwise.
+    filesystem : Optional, default None
     storage_options : dict, default None
         Key/value pairs to be passed on to the file-system backend, if any.
     open_file_options : dict, default None
@@ -389,6 +391,7 @@ def read_parquet(
         "filters": filters,
         "categories": categories,
         "index": index,
+        "filesystem": filesystem,
         "storage_options": storage_options,
         "engine": engine,
         "calculate_divisions": calculate_divisions,
@@ -418,8 +421,15 @@ def read_parquet(
     # Update input_kwargs
     input_kwargs.update({"columns": columns, "engine": engine})
 
-    fs, _, paths = get_fs_token_paths(path, mode="rb", storage_options=storage_options)
-    paths = sorted(paths, key=natural_sort_key)  # numeric rather than glob ordering
+    # Support user-specified filesystem
+    # (May be fsspec OR pyarrow FileSystem object)
+    if filesystem:
+        fs = filesystem
+        paths = path
+    else:
+        fs, _, paths = get_fs_token_paths(
+            path, mode="rb", storage_options=storage_options
+        )
 
     auto_index_allowed = False
     if index is None:
@@ -467,7 +477,6 @@ def read_parquet(
         index,
         chunksize,
         split_row_groups,
-        fs,
         aggregation_depth,
     )
 
@@ -1254,7 +1263,6 @@ def process_statistics(
     index,
     chunksize,
     split_row_groups,
-    fs,
     aggregation_depth,
 ):
     """Process row-group column statistics in metadata
@@ -1292,7 +1300,7 @@ def process_statistics(
         # Aggregate parts/statistics if we are splitting by row-group
         if chunksize or (split_row_groups and int(split_row_groups) > 1):
             parts, statistics = aggregate_row_groups(
-                parts, statistics, chunksize, split_row_groups, fs, aggregation_depth
+                parts, statistics, chunksize, split_row_groups, aggregation_depth
             )
 
         out = sorted_columns(statistics)
@@ -1398,9 +1406,7 @@ def set_index_columns(meta, index, columns, index_in_columns, auto_index_allowed
     return meta, index, columns
 
 
-def aggregate_row_groups(
-    parts, stats, chunksize, split_row_groups, fs, aggregation_depth
-):
+def aggregate_row_groups(parts, stats, chunksize, split_row_groups, aggregation_depth):
     if not stats or not stats[0].get("file_path_0", None):
         return parts, stats
 
@@ -1436,10 +1442,8 @@ def aggregate_row_groups(
                     multi_path_allowed = True
                 elif isinstance(aggregation_depth, int):
                     # Make sure files share the same directory
-                    root = stat["file_path_0"].split(fs.sep)[:-aggregation_depth]
-                    next_root = next_stat["file_path_0"].split(fs.sep)[
-                        :-aggregation_depth
-                    ]
+                    root = stat["file_path_0"].split("/")[:-aggregation_depth]
+                    next_root = next_stat["file_path_0"].split("/")[:-aggregation_depth]
                     multi_path_allowed = root == next_root
                 else:
                     raise ValueError(

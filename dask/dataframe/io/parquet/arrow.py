@@ -6,6 +6,8 @@ import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
+
+# import tlz as toolz
 from packaging.version import parse as parse_version
 
 from dask.base import tokenize
@@ -35,6 +37,8 @@ from dask.utils import getargspec, natural_sort_key
 # Check PyArrow version for feature support
 _pa_version = parse_version(pa.__version__)
 from pyarrow import dataset as pa_ds
+
+# from pyarrow.fs import FileSystem as PaFileSystem
 
 subset_stats_supported = _pa_version > parse_version("2.0.0")
 pre_buffer_supported = _pa_version >= parse_version("5.0.0")
@@ -305,6 +309,297 @@ def _need_fragments(filters, partition_keys):
     return bool(filtered_cols - partition_cols)
 
 
+# class _ArrowEngineState:
+#     def __init__(
+#         self,
+#         fs,
+#         paths,
+#         categories=None,
+#         index=None,
+#         gather_statistics=None,
+#         filters=None,
+#         split_row_groups=False,
+#         chunksize=None,
+#         aggregate_files=None,
+#         ignore_metadata_file=False,
+#         metadata_task_size=0,
+#         parquet_file_extension=None,
+#         sort_paths=True,
+#         read=None,
+#         file=None,
+#         dataset=None,
+#         **dataset_options,
+#     ):
+#         self.fs = fs
+#         self.paths = paths
+#         self.categories = categories
+#         self.index = index
+#         self.gather_statistics = gather_statistics
+#         self.filters = filters
+#         self.split_row_groups = split_row_groups
+#         self.chunksize = chunksize
+#         self.aggregate_files = aggregate_files
+#         self.ignore_metadata_file = ignore_metadata_file
+#         self.metadata_task_size = metadata_task_size
+#         self.parquet_file_extension = parquet_file_extension
+#         self.sort_paths = (sort_paths,)
+#         self.read_options = read or {}
+#         self.dataset_options = toolz.merge(dataset_options, file or {}, dataset or {})
+#         self.intialize_dataset()
+
+#     def intialize_dataset(self):
+
+#         # Use pyarrow.dataset API
+#         paths = self.paths
+
+#         # Set format and partitioning defaults
+#         if "format" not in self.dataset_options:
+#             self.dataset_options["format"] = pa_ds.ParquetFileFormat()
+#         if "partitioning" not in self.dataset_options:
+#             self.dataset_options["partitioning"] = "hive"
+
+#         # TODO: Check for glob pattern in path
+#         # TODO: Do we have relative-path problems (see GH#5608)?
+
+#         # Check for _metadata file if path is a directory name
+#         if (
+#             not self.ignore_metadata_file
+#             and (len(paths) == 1 and isinstance(paths[0], str))
+#             and not paths[0].endswith("_metadata")
+#         ):
+#             meta_path = "/".join([paths[0], "_metadata"])
+#             if isinstance(self.fs, PaFileSystem):
+#                 if self.fs.get_file_info(meta_path).is_file:
+#                     paths[0] = meta_path
+#             else:
+#                 if self.fs.exists(meta_path):
+#                     paths[0] = meta_path
+
+#         # If path is a _metadata file, use ds.parquet_dataset
+#         ds_api = pa_ds.dataset
+#         if (len(paths) == 1 and isinstance(paths[0], str)) and paths[0].endswith(
+#             "_metadata"
+#         ):
+#             self.using_global_metadata = True
+#             ds_api = pa_ds.parquet_dataset
+#         else:
+#             self.using_global_metadata = False
+
+#         # Avoid list for single path
+#         if len(paths) == 1:
+#             paths = paths[0]
+
+#         # Get dataset object
+#         self.ds = ds_api(
+#             paths,
+#             filesystem=self.fs,
+#             **self.dataset_options,
+#         )
+
+#         # Extract partition information
+#         partition_obj = []
+#         partition_names = []
+#         partitioning = self.ds.partitioning
+#         if partitioning.dictionaries:
+#             for i, name in enumerate(partitioning.schema.names):
+#                 keys = partitioning.dictionaries[i].to_pandas()
+#                 partition_obj.append(PartitionObj(name, keys))
+#                 partition_names.append(names)
+#         self.partition_obj = partition_obj
+#         self.partition_names = partition_names
+
+#     def get_meta(self):
+#         """Use parquet schema and hive-partition information
+#         (stored in dataset_info) to construct DataFrame metadata.
+#         """
+
+#         schema = self.ds.schema
+#         index = self.index
+#         categories = self.categories
+
+#         # Start with simple schema -> pandas mapping
+#         meta = schema.empty_table().to_pandas()
+
+#         # Check if we have a multi-index
+#         if len(meta.index.names) > 1:
+#             # Dask-DataFrame cannot handle multi-index
+#             meta.reset_index(inplace=True)
+
+#         # Set index if necessary
+#         if index and index != meta.index.name:
+#             if meta.index.name is not None:
+#                 meta.reset_index(inplace=True)
+#             meta.set_index(index, inplace=True)
+
+#         # Partitioning
+#         for partition in partition_obj:
+#             name = partition.name
+#             if isinstance(index, list) and name == index[0]:
+#                 # Index from directory structure
+#                 meta.index = pd.CategoricalIndex(
+#                     [], categories=partition.keys, name=index[0]
+#                 )
+#             elif name == meta.index.name:
+#                 # Index created from a categorical column
+#                 meta.index = pd.CategoricalIndex(
+#                     [], categories=partition.keys, name=meta.index.name
+#                 )
+#             elif name in meta.columns:
+#                 meta[name] = pd.Series(
+#                     pd.Categorical(categories=partition.keys, values=[]),
+#                     index=meta.index,
+#                 )
+
+#         # TODO: Handle `categories` ???
+
+#         if columns is not None:
+#             return meta[columns]
+#         return meta
+
+# def generate_collection_plan(self):
+
+#     # Ensure metadata_task_size is set
+#     # (Using config file or defaults)
+#     metadata_task_size = _set_metadata_task_size(
+#         self.metadata_task_size, self.fs
+#     )
+
+#     # Make sure that any `in`-predicate filters have iterable values
+#     filter_columns = set()
+#     if self.filters is not None:
+#         for filter in flatten(self.filters, container=list):
+#             col, op, val = filter
+#             if op == "in" and not isinstance(val, (set, list, tuple)):
+#                 raise TypeError(
+#                     "Value of 'in' filter must be a list, set or tuple."
+#                 )
+#             filter_columns.add(col)
+
+#     # Determine which columns need statistics.
+#     # At this point, gather_statistics is only True if
+#     # the user specified calculate_divisions=True
+#     stat_col_indices = {}
+#     _index_cols = [self.index] if self.gather_statistics else []
+#     for i, name in enumerate(self.schema.names):
+#         if name in _index_cols or name in filter_columns:
+#             if name in self.partition_names:
+#                 # Partition columns wont have statistics
+#                 continue
+#             stat_col_indices[name] = i
+
+#     # Decide final `gather_statistics` setting
+#     gather_statistics = _set_gather_statistics(
+#         self.gather_statistics,
+#         self.chunksize,
+#         self.split_row_groups,
+#         self.aggregation_depth,
+#         filter_columns,
+#         set(stat_col_indices),
+#     )
+
+#     # Add common kwargs
+#     common_kwargs = {
+#         "partitions": self.partition_obj,
+#         "categories": self.categories,
+#         "filters": self.filters,
+#         "schema": self.ds.schema,
+#         **self.read_options,
+#     }
+
+#     # Check if this is a very simple case where we can just return
+#     # the path names
+#     if gather_statistics is False and not self.split_row_groups:
+#         return (
+#             [
+#                 {"piece": (full_path, None, None)}
+#                 for full_path in sorted(self.ds.files, key=natural_sort_key)
+#             ],
+#             [],
+#             common_kwargs,
+#         )
+
+#     # Get/transate filters
+#     ds_filters = None
+#     if filters is not None:
+#         ds_filters = pq._filters_to_expression(filters)
+
+#     # Define subset of `dataset_info` required by _collect_file_parts
+#     dataset_info_kwargs = {
+#         "fs": fs,
+#         "split_row_groups": split_row_groups,
+#         "gather_statistics": gather_statistics,
+#         "partitioning": partitioning,
+#         "filters": filters,
+#         "ds_filters": ds_filters,
+#         "schema": schema,
+#         "stat_col_indices": stat_col_indices,
+#         "aggregation_depth": aggregation_depth,
+#         "chunksize": chunksize,
+#         "partitions": partitions,
+#     }
+
+#     # Main parts/stats-construction
+#     if (
+#         has_metadata_file
+#         or metadata_task_size == 0
+#         or metadata_task_size > len(ds.files)
+#     ):
+#         # We have a global _metadata file to work with.
+#         # Therefore, we can just loop over fragments on the client.
+
+#         # Start with sorted (by path) list of file-based fragments
+#         file_frags = sorted(
+#             (frag for frag in ds.get_fragments(ds_filters)),
+#             key=lambda x: natural_sort_key(x.path),
+#         )
+#         parts, stats = cls._collect_file_parts(file_frags, dataset_info_kwargs)
+#     else:
+#         # We DON'T have a global _metadata file to work with.
+#         # We should loop over files in parallel
+
+#         # Collect list of file paths.
+#         # If valid_paths is not None, the user passed in a list
+#         # of files containing a _metadata file.  Since we used
+#         # the _metadata file to generate our dataset object , we need
+#         # to ignore any file fragments that are not in the list.
+#         all_files = sorted(ds.files, key=natural_sort_key)
+#         if valid_paths:
+#             all_files = [
+#                 filef
+#                 for filef in all_files
+#                 if filef.split(fs.sep)[-1] in valid_paths
+#             ]
+
+#         parts, stats = [], []
+#         if all_files:
+#             # Build and compute a task graph to construct stats/parts
+#             gather_parts_dsk = {}
+#             name = "gather-pq-parts-" + tokenize(all_files, dataset_info_kwargs)
+#             finalize_list = []
+#             for task_i, file_i in enumerate(
+#                 range(0, len(all_files), metadata_task_size)
+#             ):
+#                 finalize_list.append((name, task_i))
+#                 gather_parts_dsk[finalize_list[-1]] = (
+#                     cls._collect_file_parts,
+#                     all_files[file_i : file_i + metadata_task_size],
+#                     dataset_info_kwargs,
+#                 )
+
+#             def _combine_parts(parts_and_stats):
+#                 parts, stats = [], []
+#                 for part, stat in parts_and_stats:
+#                     parts += part
+#                     if stat:
+#                         stats += stat
+#                 return parts, stats
+
+#             gather_parts_dsk["final-" + name] = (_combine_parts, finalize_list)
+#             parts, stats = Delayed("final-" + name, gather_parts_dsk).compute()
+
+#     return parts, stats, common_kwargs
+
+
 #
 #  ArrowDatasetEngine
 #
@@ -333,6 +628,41 @@ class ArrowDatasetEngine(Engine):
         parquet_file_extension=None,
         **kwargs,
     ):
+
+        # # Create _ArrowEngineState object
+        # engine_state = _ArrowEngineState(
+        #     fs,
+        #     paths,
+        #     categories=categories,
+        #     index=index,
+        #     gather_statistics=gather_statistics,
+        #     filters=filters,
+        #     split_row_groups=split_row_groups,
+        #     chunksize=chunksize,
+        #     aggregate_files=aggregate_files,
+        #     ignore_metadata_file=ignore_metadata_file,
+        #     metadata_task_size=metadata_task_size,
+        #     parquet_file_extension=parquet_file_extension,
+        #     **kwargs,
+        # )
+
+        # # Get meta
+        # meta = engine_state.get_meta()
+
+        # # Get
+        # parts, stats, common_kwargs = engine_state.generate_collection_plan()
+
+        # import pdb
+
+        # pdb.set_trace()
+        # # Add `common_kwargs` and `aggregation_depth` to the first
+        # # element of `parts`. We can return as a separate element
+        # # in the future, but should avoid breaking the API for now.
+        # if len(parts):
+        #     parts[0]["common_kwargs"] = common_kwargs
+        #     parts[0]["aggregation_depth"] = dataset_info["aggregation_depth"]
+
+        # return (meta, stats, parts, dataset_info["index"])
 
         # Stage 1: Collect general dataset information
         dataset_info = cls._collect_dataset_info(
