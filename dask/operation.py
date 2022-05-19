@@ -29,7 +29,7 @@ class CollectionOperation:
             )
         return self._dask
 
-    def subgraph(self, keys: list[tuple]) -> tuple[dict, dict]:
+    def subgraph(self, keys: list[tuple]):
         """Return the subgraph and key dependencies for this operation"""
         raise NotImplementedError
 
@@ -158,8 +158,10 @@ class MemoizingVisitor:
 
 def _generate_graph(operation, visitor, keys):
     dsk, dependency_keys = operation.subgraph(keys)
+    if not isinstance(dsk, HighLevelGraph):
+        dsk = HighLevelGraph.from_collections(operation.name, dsk, dependencies=[])
     for dep, dep_keys in dependency_keys.items():
-        dsk.update(visitor(dep, dep_keys))
+        dsk = HighLevelGraph.merge(dsk, visitor(dep, dep_keys))
     return dsk
 
 

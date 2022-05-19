@@ -1567,15 +1567,19 @@ class CollectionOperationLayer(Layer):
         output_keys: list,
         annotations: dict[str, Any] | None = None,
     ):
+
         super().__init__(annotations=annotations)
         self.operation = operation
         self.output_keys = output_keys
 
     def _construct_graph(self):
-        """Construct graph for a tree reduction."""
+        from dask.blockwise import optimize_blockwise
         from dask.operation import generate_graph
 
-        return generate_graph(self.operation, keys=self.output_keys)
+        # TODO: Make fusion optional?
+        _dsk = generate_graph(self.operation, keys=self.output_keys)
+        _dsk = optimize_blockwise(_dsk, keys=self.output_keys)
+        return _dsk.to_dict()
 
     def __repr__(self):
         return f"CollectionOperationLayer<operation='{self.operation}'>"

@@ -3,7 +3,7 @@ from __future__ import annotations
 import itertools
 import operator
 from collections.abc import Mapping
-from functools import cached_property, singledispatch
+from functools import singledispatch
 from typing import Any
 
 import numpy as np
@@ -12,7 +12,7 @@ from dask.base import tokenize
 from dask.highlevelgraph import HighLevelGraph
 from dask.operation import CollectionOperation, MemoizingVisitor, operations, regenerate
 from dask.optimization import SubgraphCallable
-from dask.utils import apply, is_arraylike
+from dask.utils import is_arraylike
 
 
 class DataFrameOperation(CollectionOperation):
@@ -88,10 +88,10 @@ class CompatFrameOperation(DataFrameOperation):
             raise ValueError
         return self._dask
 
-    def subgraph(self, keys: list[tuple]) -> tuple[dict, dict]:
+    def subgraph(self, keys: list[tuple]):
         if self.dask is None:
             raise ValueError("Graph is undefined")
-        return self.dask.to_dict(), {}
+        return self.dask, {}
 
     @property
     def dependencies(self) -> Mapping[str, CollectionOperation]:
@@ -118,9 +118,11 @@ class DataFrameCreation(DataFrameOperation):
         divisions=None,
         label=None,
         token=None,
+        produces_tasks=False,
         creation_info=None,
     ):
         from dask.dataframe.io.utils import DataFrameIOFunction
+        from dask.layers import DataFrameIOLayer
 
         if columns is not None and isinstance(io_func, DataFrameIOFunction):
             self.io_func = io_func.project_columns(list(columns))
@@ -135,7 +137,21 @@ class DataFrameCreation(DataFrameOperation):
         self.inputs = inputs
         divisions = divisions or (None,) * (len(inputs) + 1)
         self._divisions = tuple(divisions)
+        self.produces_tasks = produces_tasks
         self.creation_info = creation_info or {}
+        self._layer = DataFrameIOLayer(
+            self.name,
+            self.columns,
+            self.inputs,
+            self.io_func,
+            label=self.label,
+            produces_tasks=self.produces_tasks,
+            creation_info=self.creation_info,
+        )
+
+    @property
+    def layer(self):
+        return self._layer
 
     def copy(self):
         return type(self)(
@@ -145,30 +161,16 @@ class DataFrameCreation(DataFrameOperation):
             columns=self.columns,
             divisions=self.divisions,
             label=self.label,
+            produces_tasks=self.produces_tasks,
             creation_info=self.creation_info,
         )
 
-    @cached_property
-    def _subgraph_callable(self):
-        inkeys = [f"inputs-{self.name}"]
-        subgraph = {self.name: (self.io_func, inkeys[-1])}
-        return SubgraphCallable(
-            dsk=subgraph,
-            outkey=self.name,
-            inkeys=inkeys,
+    def subgraph(self, keys: list[tuple]):
+        culled_layer, _ = self.layer.cull(keys, set())
+        graph = HighLevelGraph.from_collections(
+            self.name, culled_layer, dependencies=[]
         )
-
-    def _fuse_subgraph_callables(self):
-        func = self._subgraph_callable
-        return func, {func.inkeys[0]: self.inputs}
-
-    def subgraph(self, keys: list[tuple]) -> tuple[dict, dict]:
-        dsk = {}
-        for key in keys:
-            name, index = key
-            assert name == self.name
-            dsk[key] = (self._subgraph_callable, self.inputs[index])
-        return dsk, {}
+        return graph, {}
 
     @property
     def dependencies(self) -> Mapping[str, CollectionOperation]:
@@ -214,6 +216,8 @@ class DataFrameMapOperation(DataFrameOperation):
         columns=None,
         **kwargs,
     ):
+        from dask.blockwise import BlockwiseDep, blockwise
+
         self.label = label or "map-partitions"
         token = token or tokenize(func, meta, args, divisions)
         self._name = f"{self.label}-{token}"
@@ -231,6 +235,38 @@ class DataFrameMapOperation(DataFrameOperation):
         self._columns = columns
         self.kwargs = kwargs
 
+        pairs = []
+        numblocks = {}
+        for arg in self.args:
+            if isinstance(arg, CollectionOperation):
+                # TODO: Handle different kinds of CollectionOperation's differently
+                pairs.extend([arg._name, "i"])
+                numblocks[arg._name] = (arg.npartitions,)
+            elif isinstance(arg, BlockwiseDep):
+                if len(arg.numblocks) == 1:
+                    pairs.extend([arg, "i"])
+                elif len(arg.numblocks) == 2:
+                    pairs.extend([arg, "ij"])
+                else:
+                    raise ValueError(
+                        f"BlockwiseDep arg {arg!r} has {len(arg.numblocks)} dimensions; only 1 or 2 are supported."
+                    )
+            else:
+                pairs.extend([arg, None])
+        self._layer = blockwise(
+            self.func,
+            self.name,
+            "i",
+            *pairs,
+            numblocks=numblocks,
+            concatenate=True,
+            **self.kwargs,
+        )
+
+    @property
+    def layer(self):
+        return self._layer
+
     @property
     def func(self):
         return self._func
@@ -246,98 +282,16 @@ class DataFrameMapOperation(DataFrameOperation):
             **self.kwargs,
         )
 
-    @cached_property
-    def _subgraph_callable(self):
-        task = [self.func]
-        inkeys = []
-        for arg in self.args:
-            if isinstance(arg, CollectionOperation):
-                inkeys.append(arg.name)
-                task.append(inkeys[-1])
-            else:
-                task.append(arg)
-
-        subgraph = {
-            self.name: (
-                apply,
-                task[0],
-                task[1:],
-                self.kwargs,
-            )
-            if self.kwargs
-            else tuple(task)
-        }
-        return SubgraphCallable(
-            dsk=subgraph,
-            outkey=self.name,
-            inkeys=inkeys,
+    def subgraph(self, keys: list[tuple]):
+        culled_layer, _ = self.layer.cull(keys, set())
+        graph = HighLevelGraph.from_collections(
+            self.name, culled_layer, dependencies=[]
         )
-
-    def _fuse_subgraph_callables(self):
-        func = self._subgraph_callable
-        inkeys = func.inkeys
-        dep_funcs = {}
-        all_deps = self.dependencies.copy()
-        for key in inkeys:
-            assert key in self.dependencies
-            dep = self.dependencies[key]
-            if isinstance(dep, (DataFrameMapOperation, DataFrameCreation)):
-                _func, _deps = dep._fuse_subgraph_callables()
-                dep_funcs[key] = _func
-                all_deps.update(_deps)
-
-        if dep_funcs:
-            new_dsk = func.dsk.copy()
-            new_inkeys = []
-            for key in func.inkeys:
-                if key in dep_funcs:
-                    dep_func = dep_funcs[key]
-                    new_dsk.update(dep_func.dsk)
-                    new_inkeys.extend(
-                        [k for k in dep_func.inkeys if k not in new_inkeys]
-                    )
-                elif key not in new_inkeys:
-                    new_inkeys.append(key)
-            func = SubgraphCallable(
-                dsk=new_dsk,
-                outkey=self.name,
-                inkeys=new_inkeys,
-            )
-
-        return func, all_deps
-
-    def subgraph(self, keys: list[tuple]) -> tuple[dict, dict]:
-
-        # Get (fused) SubgraphCallable and deps.
-        # `deps` corresponds to a dict, where the values are
-        # either a `CollectionOperation` or indexable object.
-        # Indexable elements correspond to DataFrameCreation inputs.
-        func, deps = self._fuse_subgraph_callables()
-
-        # Populate dep_keys
         dep_keys = {}
-        for func_key in func.inkeys:
-            fused_dep = deps[func_key]
-            if isinstance(fused_dep, CollectionOperation):
-                dep_keys[fused_dep] = [(func_key, key[1]) for key in keys]
+        for dep_name, dep in self.dependencies.items():
+            dep_keys[dep] = [(dep_name, key[1]) for key in keys]
 
-        # Build the graph
-        dsk: dict[tuple, tuple] = {}
-        for key in keys:
-            name, index = key
-            assert name == self.name
-
-            task = [func]
-            for arg in func.inkeys:
-                fused_dep = deps[func_key]
-                if isinstance(fused_dep, CollectionOperation):
-                    dep_key = (arg, index)
-                else:
-                    dep_key = fused_dep[index]
-                task.append(dep_key)
-            dsk[key] = tuple(task)
-
-        return dsk, dep_keys
+        return graph, dep_keys
 
     @property
     def dependencies(self) -> Mapping[str, CollectionOperation]:
