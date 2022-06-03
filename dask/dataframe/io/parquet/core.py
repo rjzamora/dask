@@ -173,9 +173,14 @@ def read_parquet(
     calculate_divisions=None,
     ignore_metadata_file=False,
     metadata_task_size=None,
-    split_row_groups=False,
-    chunksize=None,
-    aggregate_files=None,
+    partition_size_files=1,  # How many files per dd partition
+    # partition_size_row_groups=None,  # How many row-groups per dd partition
+    partition_boundary=None,  # Constraint on "which" files may be included in the same dd partition
+    partition_size_bytes=None,
+    partition_size_rows=None,
+    split_row_groups=False,  # Deprecate? (suggest partition_size_row_groups)
+    chunksize=None,  # Deprecate?
+    aggregate_files=None,  # Deprecate?
     parquet_file_extension=(".parq", ".parquet", ".pq"),
     **kwargs,
 ):
@@ -427,6 +432,10 @@ def read_parquet(
         "chunksize": chunksize,
         "aggregate_files": aggregate_files,
         "parquet_file_extension": parquet_file_extension,
+        "partition_size_rows": partition_size_rows,
+        "partition_size_bytes": partition_size_bytes,
+        "partition_size_files": partition_size_files,
+        "partition_boundary": partition_boundary,
         **kwargs,
     }
 
@@ -434,6 +443,9 @@ def read_parquet(
         input_kwargs["columns"] = [columns]
         df = read_parquet(path, **input_kwargs)
         return df[columns]
+
+    if partition_size_files > 1 and split_row_groups:
+        raise ValueError("Cannot specify split_row_groups if partition_size_files > 1")
 
     if columns is not None:
         columns = list(columns)
@@ -449,6 +461,22 @@ def read_parquet(
 
     fs, _, paths = get_fs_token_paths(path, mode="rb", storage_options=storage_options)
     paths = sorted(paths, key=natural_sort_key)  # numeric rather than glob ordering
+
+    # Use partition_size_bytes and/or partition_size_rows to set
+    # split_row_groups and partition_size_files
+    split_row_groups, partition_size_files = set_dask_partition_options(
+        engine,
+        partition_size_bytes,
+        partition_size_rows,
+        split_row_groups,
+        partition_size_files,
+        fs,
+        paths,
+        columns,
+        ignore_metadata_file,
+        parquet_file_extension,
+        **kwargs,
+    )
 
     auto_index_allowed = False
     if index is None:
@@ -467,6 +495,7 @@ def read_parquet(
         split_row_groups=split_row_groups,
         chunksize=chunksize,
         aggregate_files=aggregate_files,
+        partition_boundary=partition_boundary,
         ignore_metadata_file=ignore_metadata_file,
         metadata_task_size=metadata_task_size,
         parquet_file_extension=parquet_file_extension,
@@ -487,6 +516,12 @@ def read_parquet(
         # may be stored in the first element of `parts`
         common_kwargs = parts[0].pop("common_kwargs", {})
         aggregation_depth = parts[0].pop("aggregation_depth", aggregation_depth)
+
+    # Aggregate files (no statistics required)
+    if partition_size_files > 1:
+        parts, statistics = coalesce_files(
+            engine, parts, statistics, partition_size_files, partition_boundary
+        )
 
     # Parse dataset statistics from metadata (if available)
     parts, divisions, index, index_in_columns = process_statistics(
@@ -1516,6 +1551,102 @@ def aggregate_row_groups(
 
     parts_agg.append(next_part)
     stats_agg.append(next_stat)
+
+    return parts_agg, stats_agg
+
+
+def set_dask_partition_options(
+    engine,
+    partition_size_bytes,
+    partition_size_rows,
+    split_row_groups,
+    partition_size_files,
+    fs,
+    paths,
+    columns,
+    ignore_metadata_file,
+    parquet_file_extension,
+    **kwargs,
+):
+    # Use engine to sample file metadata, and use the statistics
+    # to set split_row_groups and partition_size_files
+    if partition_size_bytes or partition_size_rows:
+
+        if split_row_groups:
+            warnings.warn("Ignoring split_row_groups option")
+        if partition_size_files > 1:
+            warnings.warn("Ignoring partition_size_files option")
+
+        md_stats = engine.sample_metadata(
+            fs,
+            paths,
+            columns=columns,
+            ignore_metadata_file=ignore_metadata_file,
+            parquet_file_extension=parquet_file_extension,
+            **kwargs,
+        )
+
+        for kind in ["file", "row-group"]:
+            raw_group_size = None
+            if partition_size_rows:
+                raw_group_size = partition_size_rows / md_stats[kind]["nrows"]
+            if partition_size_bytes:
+                _raw_group_size = (
+                    parse_bytes(partition_size_bytes) / md_stats[kind]["bytes"]
+                )
+                raw_group_size = min(
+                    _raw_group_size, (raw_group_size or _raw_group_size)
+                )
+            group_size = max(math.floor(raw_group_size), 1)
+            if group_size > 1:
+                break
+
+        if kind == "file":
+            split_row_groups = False
+            partition_size_files = group_size
+        else:
+            split_row_groups = group_size
+            partition_size_files = 1
+            if raw_group_size < 1:
+                warnings.warn(
+                    "Sampled row-group is larger than the desired partition size."
+                )
+
+    return split_row_groups, partition_size_files
+
+
+def coalesce_files(engine, parts, statistics, partition_size_files, partition_boundary):
+
+    agg_groups = engine.make_file_groups(parts, partition_boundary)
+
+    def _coalesce_statistics(original_stats):
+        if not original_stats:
+            return {}
+        new_stat = original_stats[0].copy()
+        for stat in original_stats[1:]:
+            new_stat["total_byte_size"] += stat["total_byte_size"]
+            new_stat["num-rows"] += stat["num-rows"]
+            new_stat["num-row-groups"] += stat["num-row-groups"]
+            for col, col_add in zip(new_stat["columns"], stat["columns"]):
+                if col["name"] != col_add["name"]:
+                    raise ValueError("Columns are different!!")
+                if "min" in col:
+                    col["min"] = min(col["min"], col_add["min"])
+                if "max" in col:
+                    col["max"] = max(col["max"], col_add["max"])
+        return new_stat
+
+    parts_agg = []
+    stats_agg = []
+    for group in agg_groups:
+        for i in range(0, len(group), partition_size_files):
+            _new_part = parts[i : i + partition_size_files]
+            if _new_part:
+                parts_agg.append(_new_part)
+                if statistics:
+                    stats_agg.append(
+                        _coalesce_statistics(statistics[i : i + partition_size_files])
+                    )
 
     return parts_agg, stats_agg
 

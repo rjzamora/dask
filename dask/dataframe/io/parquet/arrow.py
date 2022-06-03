@@ -1,4 +1,5 @@
 import json
+import sys
 import textwrap
 from collections import defaultdict
 from datetime import datetime
@@ -328,6 +329,7 @@ class ArrowDatasetEngine(Engine):
         gather_statistics=None,
         filters=None,
         split_row_groups=False,
+        partition_boundary=None,
         chunksize=None,
         aggregate_files=None,
         ignore_metadata_file=False,
@@ -357,6 +359,7 @@ class ArrowDatasetEngine(Engine):
         meta = cls._create_dd_meta(dataset_info)
 
         # Stage 3: Generate parts and stats
+        dataset_info["partition_boundary"] = partition_boundary
         parts, stats, common_kwargs = cls._construct_collection_plan(dataset_info)
 
         # Add `common_kwargs` and `aggregation_depth` to the first
@@ -367,6 +370,77 @@ class ArrowDatasetEngine(Engine):
             parts[0]["aggregation_depth"] = dataset_info["aggregation_depth"]
 
         return (meta, stats, parts, dataset_info["index"])
+
+    @classmethod
+    def make_file_groups(
+        cls,
+        parts,
+        partition_boundary,
+    ):
+        records = []
+        for part in parts:
+            piece = part["piece"]
+            partitions = piece[2]
+            if partition_boundary and partitions:
+                records.append(
+                    tuple(p for p in partitions if p[0] in partition_boundary)
+                )
+            else:
+                records.append(True)
+        parts_df = pd.DataFrame(
+            records,
+            columns=["partitions"],
+        ).reset_index()
+        return parts_df.groupby("partitions").agg(list).reset_index(drop=True)["index"]
+
+    @classmethod
+    def sample_metadata(
+        cls,
+        fs,
+        paths,
+        columns=None,
+        ignore_metadata_file=False,
+        parquet_file_extension=None,
+        **kwargs,
+    ):
+
+        # Extract dataset object
+        ds = cls._collect_dataset_info(
+            paths=paths,
+            fs=fs,
+            categories=None,
+            index=None,
+            gather_statistics=False,
+            filters=None,
+            split_row_groups=False,
+            chunksize=None,
+            aggregate_files=False,
+            ignore_metadata_file=ignore_metadata_file,
+            metadata_task_size=0,
+            parquet_file_extension=parquet_file_extension,
+            kwargs=kwargs,
+        )["ds"]
+
+        row_groups = next(iter(ds.get_fragments())).row_groups
+
+        ignore_size = 0
+        if row_groups:
+            if row_groups[0].statistics and columns:
+                for col, stats in row_groups[0].statistics.items():
+                    if col not in columns:
+                        ignore_size += sys.getsizeof(stats.get("max", 0))
+
+            sizes, nrows = [], []
+            for rg in row_groups:
+                nrows.append(rg.num_rows)
+                sizes.append(rg.total_byte_size - nrows[-1] * ignore_size)
+
+            return {
+                "file": {"nrows": sum(nrows), "bytes": sum(sizes)},
+                "row-group": {"nrows": nrows[0], "bytes": sizes[0]},
+            }
+
+        raise ValueError
 
     @classmethod
     def multi_support(cls):
@@ -1097,6 +1171,7 @@ class ArrowDatasetEngine(Engine):
         fs = dataset_info["fs"]
         filters = dataset_info["filters"]
         split_row_groups = dataset_info["split_row_groups"]
+        partition_boundary = dataset_info["partition_boundary"]
         gather_statistics = dataset_info["gather_statistics"]
         chunksize = dataset_info["chunksize"]
         aggregation_depth = dataset_info["aggregation_depth"]
@@ -1159,7 +1234,7 @@ class ArrowDatasetEngine(Engine):
 
         # Check if this is a very simple case where we can just return
         # the path names
-        if gather_statistics is False and not split_row_groups:
+        if gather_statistics is False and not (split_row_groups or partition_boundary):
             return (
                 [
                     {"piece": (full_path, None, None)}
@@ -1186,6 +1261,7 @@ class ArrowDatasetEngine(Engine):
             "aggregation_depth": aggregation_depth,
             "chunksize": chunksize,
             "partitions": partitions,
+            "dataset_options": kwargs["dataset"],
         }
 
         # Main parts/stats-construction
@@ -1261,6 +1337,7 @@ class ArrowDatasetEngine(Engine):
         split_row_groups = dataset_info_kwargs["split_row_groups"]
         gather_statistics = dataset_info_kwargs["gather_statistics"]
         partitions = dataset_info_kwargs["partitions"]
+        dataset_options = dataset_info_kwargs["dataset_options"]
 
         # Make sure we are processing a non-empty list
         if not isinstance(files_or_frags, list):
@@ -1285,6 +1362,7 @@ class ArrowDatasetEngine(Engine):
                 pa_ds.dataset(
                     files_or_frags,
                     filesystem=fs,
+                    **dataset_options,
                 ).get_fragments()
             )
         else:
