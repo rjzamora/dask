@@ -1,5 +1,4 @@
 import json
-import sys
 import textwrap
 from collections import defaultdict
 from datetime import datetime
@@ -377,21 +376,24 @@ class ArrowDatasetEngine(Engine):
         parts,
         partition_boundary,
     ):
+        if not partition_boundary:
+            return pd.Series([np.arange(len(parts))])
+
         records = []
         for part in parts:
             piece = part["piece"]
             partitions = piece[2]
-            if partition_boundary and partitions:
-                records.append(
-                    tuple(p for p in partitions if p[0] in partition_boundary)
-                )
-            else:
-                records.append(True)
-        parts_df = pd.DataFrame(
-            records,
-            columns=["partitions"],
-        ).reset_index()
-        return parts_df.groupby("partitions").agg(list).reset_index(drop=True)["index"]
+            if not partitions:
+                raise ValueError
+            records.append(dict(partitions))
+        parts_df = pd.DataFrame(records).reset_index()
+        result = (
+            parts_df.groupby(partition_boundary)
+            .agg(list)
+            .reset_index(drop=True)["index"]
+        )
+        assert isinstance(result, pd.Series)
+        return result.copy()
 
     @classmethod
     def sample_metadata(
@@ -422,22 +424,12 @@ class ArrowDatasetEngine(Engine):
         )["ds"]
 
         row_groups = next(iter(ds.get_fragments())).row_groups
-
-        ignore_size = 0
         if row_groups:
-            if row_groups[0].statistics and columns:
-                for col, stats in row_groups[0].statistics.items():
-                    if col not in columns:
-                        ignore_size += sys.getsizeof(stats.get("max", 0))
-
-            sizes, nrows = [], []
-            for rg in row_groups:
-                nrows.append(rg.num_rows)
-                sizes.append(rg.total_byte_size - nrows[-1] * ignore_size)
-
+            sizes = [rg.total_byte_size for rg in row_groups]
+            nrows = [rg.num_rows for rg in row_groups]
             return {
                 "file": {"nrows": sum(nrows), "bytes": sum(sizes)},
-                "row-group": {"nrows": nrows[0], "bytes": sizes[0]},
+                "row-group": {"nrows": np.max(nrows), "bytes": np.max(sizes)},
             }
 
         raise ValueError

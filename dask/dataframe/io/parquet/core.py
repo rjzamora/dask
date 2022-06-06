@@ -173,12 +173,11 @@ def read_parquet(
     calculate_divisions=None,
     ignore_metadata_file=False,
     metadata_task_size=None,
+    split_row_groups=False,  # How many row-groups per dd partition
     partition_size_files=1,  # How many files per dd partition
-    # partition_size_row_groups=None,  # How many row-groups per dd partition
-    partition_boundary=None,  # Constraint on "which" files may be included in the same dd partition
+    partition_boundary=None,  # "Which" files may be included in the same dd partition
     partition_size_bytes=None,
     partition_size_rows=None,
-    split_row_groups=False,  # Deprecate? (suggest partition_size_row_groups)
     chunksize=None,  # Deprecate?
     aggregate_files=None,  # Deprecate?
     parquet_file_extension=(".parq", ".parquet", ".pq"),
@@ -272,6 +271,46 @@ def read_parquet(
         parquet-file row-group. If False, each partition will correspond to a
         complete file.  If a positive integer value is given, each dataframe
         partition will correspond to that number of parquet row-groups (or fewer).
+    partition_size_files : int, default 1
+        The maximum number of files that may be mapped onto the same output DataFrame
+        partition. This value cannot be >1 if ``bool(split_row_groups)`` is ``True``.
+        Use ``partition_boundary`` to specify if any directory-partitioned columns
+        must match for files to be combined into the same DataFrame partition.
+    partition_size_bytes : int or str, default None
+        The desired maximum size of each output ``DataFrame`` partition in terms
+        of total (uncompressed) Parquet storage space. If specified, Parquet
+        metadata from the first file in the dataset will be sampled, and either
+        ``split_row_groups`` or ``partition_size_files`` will be automatically
+        set. This option assumes that the sampled file is representitive of the
+        entire dataset.
+    partition_size_rows : int, default None
+        The desired maximum size of each output ``DataFrame`` partition in terms
+        of total rows. If specified, Parquet metadata from the first file in the
+        dataset will be sampled, and either ``split_row_groups`` or
+        ``partition_size_files`` will be automatically set. This option assumes
+        that the sampled file is representitive of the entire dataset.
+    partition_boundary : list, default None
+        List of hive/directory-partitioned column names that must match for all rows
+        in the same output DataFrame partition. For example, if ``["section"]`` is
+        specified for the directory structure below, ``01.parquet`` and ``03.parquet``
+        may be aggregated together, but ``01.parquet`` and ``02.parquet`` cannot be.
+        If, however, ``partition_boundary`` is set to ``["region", "section"]``, then
+        ``03.parquet`` and ``04.parquet`` are the only two files that may be
+        aggregated into the same output partition::
+
+            dataset-path/
+            ├── region=1/
+            │   ├── section=a/
+            │   │   └── 01.parquet
+            │   ├── section=b/
+            │   └── └── 02.parquet
+            └── region=2/
+                ├── section=a/
+                │   ├── 03.parquet
+                └── └── 04.parquet
+
+        Note that the default behavior is to allow any two files to be mapped to the
+        same output partition.
     chunksize : int or str, default None
         WARNING: The ``chunksize`` argument will be deprecated in the future.
         Please use ``split_row_groups`` to specify how many row-groups should be
@@ -352,6 +391,11 @@ def read_parquet(
     to_parquet
     pyarrow.parquet.ParquetDataset
     """
+
+    # Make sure partition_size_files and split_row_groups are not
+    # specified at the same time
+    if partition_size_files > 1 and split_row_groups:
+        raise ValueError("Cannot specify split_row_groups if partition_size_files > 1")
 
     # "Pre-deprecation" warning for `chunksize`
     if chunksize:
@@ -443,9 +487,6 @@ def read_parquet(
         input_kwargs["columns"] = [columns]
         df = read_parquet(path, **input_kwargs)
         return df[columns]
-
-    if partition_size_files > 1 and split_row_groups:
-        raise ValueError("Cannot specify split_row_groups if partition_size_files > 1")
 
     if columns is not None:
         columns = list(columns)
