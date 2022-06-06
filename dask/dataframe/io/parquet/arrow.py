@@ -387,13 +387,11 @@ class ArrowDatasetEngine(Engine):
                 raise ValueError
             records.append(dict(partitions))
         parts_df = pd.DataFrame(records).reset_index()
-        result = (
+        return (
             parts_df.groupby(partition_boundary)
             .agg(list)
             .reset_index(drop=True)["index"]
         )
-        assert isinstance(result, pd.Series)
-        return result.copy()
 
     @classmethod
     def sample_metadata(

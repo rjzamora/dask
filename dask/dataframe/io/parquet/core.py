@@ -174,10 +174,10 @@ def read_parquet(
     ignore_metadata_file=False,
     metadata_task_size=None,
     split_row_groups=False,  # How many row-groups per dd partition
-    partition_size_files=1,  # How many files per dd partition
-    partition_boundary=None,  # "Which" files may be included in the same dd partition
     partition_size_bytes=None,
     partition_size_rows=None,
+    partition_size_files=1,  # How many files per dd partition
+    partition_boundary=None,  # "Which" files may be included in the same dd partition
     chunksize=None,  # Deprecate?
     aggregate_files=None,  # Deprecate?
     parquet_file_extension=(".parq", ".parquet", ".pq"),
