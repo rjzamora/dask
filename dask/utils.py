@@ -1192,6 +1192,8 @@ def ensure_dict(d: Mapping[K, V], *, copy: bool = False) -> dict[K, V]:
         If True, guarantee that the return value is always a shallow copy of d;
         otherwise it may be the input itself.
     """
+    from dask.highlevelgraph import HighLevelGraph
+
     if type(d) is dict:
         return d.copy() if copy else d
     try:
@@ -1199,10 +1201,31 @@ def ensure_dict(d: Mapping[K, V], *, copy: bool = False) -> dict[K, V]:
     except AttributeError:
         return dict(d)
 
+    def construct_graph(name, keys=None):
+        layer = layers[name]
+
+        dsk, deps = layer.get_subgraph(keys, d.dependencies[name])
+        for dep, dep_keys in deps.items():
+            dsk.update(construct_graph(dep, dep_keys))
+
+        return dsk
+
+    # Construct graph recursively
     result = {}
-    for layer in toolz.unique(layers.values(), key=id):
-        result.update(layer)
+    assert isinstance(d, HighLevelGraph)
+    for output_layer in d._output_layers:
+        result.update(
+            construct_graph(
+                output_layer,
+                keys=d._output_keys.get(output_layer, None),
+            )
+        )
     return result
+
+    # result = {}
+    # for layer in toolz.unique(layers.values(), key=id):
+    #     result.update(layer)
+    # return result
 
 
 def ensure_set(s: Set[T], *, copy: bool = False) -> set[T]:
