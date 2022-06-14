@@ -1302,6 +1302,39 @@ class ArrowDatasetEngine(Engine):
         aggregation_depth = dataset_info_kwargs["aggregation_depth"]
         chunksize = dataset_info_kwargs["chunksize"]
 
+        # Construct estimated file statistics if split_row_groups is False
+        estimated_file_stats = {}
+        estimated_rg_stats = {}
+        infer_rg_statistics = (
+            chunksize
+            and split_row_groups  # (maximum) output-partition size specified
+            and not stat_col_indices  # Row-group splitting IS allowed  # No column-statistics required
+        )
+        infer_file_statistics = (
+            chunksize
+            and not split_row_groups  # (maximum) output-partition size specified
+            and not stat_col_indices  # Row-group splitting NOT allowed  # No column-statistics required
+        )
+        if (infer_rg_statistics or infer_file_statistics) and file_frags:
+            file_size_bytes, file_size_rows = 0, 0
+            for rg in file_frags[0].row_groups:
+                if infer_rg_statistics and not estimated_rg_stats:
+                    estimated_rg_stats = {
+                        "total_byte_size": rg.total_byte_size,
+                        "num-rows": rg.num_rows,
+                    }
+                if not infer_file_statistics:
+                    break
+                file_size_bytes += rg.total_byte_size
+                file_size_rows += rg.num_rows
+
+            estimated_file_stats = {
+                "total_byte_size": file_size_bytes,
+                "num-rows": file_size_rows,
+            }
+
+        # import pdb; pdb.set_trace()
+
         # Intialize row-group and statistiscs data structures
         file_row_groups = defaultdict(list)
         file_row_group_stats = defaultdict(list)
@@ -1421,6 +1454,7 @@ class ArrowDatasetEngine(Engine):
                 "partition_obj": partitions,
                 "data_path": "",
             },
+            estimated_file_stats=estimated_file_stats,
         )
 
     @classmethod

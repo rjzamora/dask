@@ -561,6 +561,7 @@ def _row_groups_to_parts(
     stat_col_indices,
     make_part_func,
     make_part_kwargs,
+    estimated_file_stats=None,
 ):
 
     # Construct `parts` and `stats`
@@ -620,7 +621,15 @@ def _row_groups_to_parts(
                 continue
 
             parts.append(part)
-            if gather_statistics:
+            if estimated_file_stats:
+                stats.append(
+                    {
+                        "file_path_0": filename,
+                        "columns": [],
+                        **estimated_file_stats.copy(),
+                    }
+                )
+            elif gather_statistics:
                 stat = _aggregate_stats(
                     filename,
                     file_row_group_stats[filename],
