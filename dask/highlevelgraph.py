@@ -77,31 +77,52 @@ class Layer(Mapping):
             config.get("collection_annotations", None)
         )
 
-    def get_subgraph(self, keys, hlg_dependencies):
+    def get_subgraph(self, keys, dep_layers):
         """Return this Layer's subgraph and external dependencies
 
         Parameters
         ----------
         keys : Iterable[Hashable]
             List of keys required by the Layer.
-        hlg_dependencies : Set[str]
-            Set of Layer names that the current Layer is known
+        dep_layers : Mapping[str, Layer]
+            External layers that the current Layer is known
             to depend on.
 
         Returns
         -------
         dsk: dict
             Materialized subgraph for the current Layer.
-        key_deps: Mapping[str, Iterable | None]
+        key_deps: Mapping[str, Iterable]
             External keys required by the current Layer.
         """
 
-        # Default implementation will not use `keys` argument
-        # to "cull" the subgraph or `key_deps` return
+        # Extract all possible key dependencies
+        all_dep_keys = {}
+        for dep, dep_layer in dep_layers.items():
+            all_dep_keys[dep] = dep_layer.get_output_keys()
 
-        dsk = dict(self)
-        key_deps = {dep: None for dep in hlg_dependencies}
-        return dsk, key_deps
+        # Materialize & Cull (simultaneously)
+        key_deps = {}
+        full_deps = {}
+        seen = set()
+        out = {}
+        work = keys.copy()
+        while work:
+            k = work.pop()
+            out[k] = self[k]
+
+            full_deps[k] = set()
+            for d, ks in all_dep_keys.items():
+                key_deps[d] = keys_in_tasks(ks, [self[k]])
+                full_deps[k] |= key_deps[d]
+
+            for d in full_deps[k]:
+                if d not in seen:
+                    if d in self:
+                        seen.add(d)
+                        work.add(d)
+
+        return out, key_deps
 
     @abc.abstractmethod
     def is_materialized(self) -> bool:

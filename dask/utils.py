@@ -1202,15 +1202,23 @@ def ensure_dict(d: Mapping[K, V], *, copy: bool = False) -> dict[K, V]:
         return dict(d)
 
     def construct_graph(name, keys=None):
-        layer = layers[name]
+        # Utility to construct a low-level graph
 
-        dsk, deps = layer.get_subgraph(keys, d.dependencies[name])
-        for dep, dep_keys in deps.items():
-            dsk.update(construct_graph(dep, dep_keys))
+        # Extract subset of layers required by the
+        # "current" layer
+        dep_layers = {dname: layers[dname] for dname in d.dependencies[name]}
+        layer = layers[name]  # The "current" layer
+
+        # Start with the subgraph for the current
+        # layer and then update the graph recursively
+        dsk, real_deps = layer.get_subgraph(keys, dep_layers)
+        for dep, real_dep_keys in real_deps.items():
+            dsk.update(construct_graph(dep, real_dep_keys))
 
         return dsk
 
-    # Construct graph recursively
+    # Construct graph recursively,
+    # starting with "output" layers
     result = {}
     assert isinstance(d, HighLevelGraph)
     for output_layer in d._output_layers:
