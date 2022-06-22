@@ -95,34 +95,19 @@ class Layer(Mapping):
         key_deps: Mapping[str, Iterable]
             External keys required by the current Layer.
         """
+        from dask.optimization import cull
 
-        # Extract all possible key dependencies
-        all_dep_keys = {}
-        for dep, dep_layer in dep_layers.items():
-            all_dep_keys[dep] = dep_layer.get_output_keys()
+        # Materialize & cull
+        # TODO: Can we use the `dependencies` returned by cull?
+        dsk, _ = cull(dict(self), keys)
 
-        # Materialize & Cull (simultaneously)
+        # Extract external dependencies
         key_deps = {}
-        full_deps = {}
-        seen = set()
-        out = {}
-        work = keys.copy()
-        while work:
-            k = work.pop()
-            out[k] = self[k]
+        for dep, dep_layer in dep_layers.items():
+            layer_dep_keys = set(dep_layer.get_output_keys())
+            key_deps[dep] = keys_in_tasks(layer_dep_keys, [dsk])
 
-            full_deps[k] = set()
-            for d, ks in all_dep_keys.items():
-                key_deps[d] = keys_in_tasks(ks, [self[k]])
-                full_deps[k] |= key_deps[d]
-
-            for d in full_deps[k]:
-                if d not in seen:
-                    if d in self:
-                        seen.add(d)
-                        work.add(d)
-
-        return out, key_deps
+        return dsk, key_deps
 
     @abc.abstractmethod
     def is_materialized(self) -> bool:
@@ -673,16 +658,12 @@ class HighLevelGraph(Mapping):
     key_dependencies: dict[Hashable, Set]
     _to_dict: dict
     _all_external_keys: set
-    _output_layers: set
-    _output_keys: dict[Hashable, Set]
 
     def __init__(
         self,
         layers: Mapping[str, Mapping],
         dependencies: Mapping[str, Set],
         key_dependencies: dict[Hashable, Set] | None = None,
-        output_layers: str | set | None = None,
-        output_keys: dict[Hashable, Set] | None = None,
     ):
         self.dependencies = dependencies
         self.key_dependencies = key_dependencies or {}
@@ -691,24 +672,6 @@ class HighLevelGraph(Mapping):
             k: v if isinstance(v, Layer) else MaterializedLayer(v)
             for k, v in layers.items()
         }
-        # Keep track of the output layer(s) for this HLG
-        if output_layers:
-            self._output_layers = (
-                output_layers if isinstance(output_layers, set) else {output_layers}
-            )
-        else:
-            self._output_layers = set()
-            for k, v in self.dependents.items():
-                if not v:
-                    self._output_layers.add(k)
-
-        # Keep track of output keys for this HLG
-        if output_keys:
-            self._output_keys = output_keys
-        else:
-            self._output_keys = {}
-            for layer in self._output_layers:
-                self._output_keys[layer] = set(self.layers[layer].get_output_keys())
 
     @classmethod
     def _from_collection(cls, name, layer, collection):
@@ -895,24 +858,18 @@ class HighLevelGraph(Mapping):
 
     @classmethod
     def merge(cls, *graphs):
-        output_keys = {}
-        known_output_keys = True
         layers = {}
         dependencies = {}
         for g in graphs:
             if isinstance(g, HighLevelGraph):
                 layers.update(g.layers)
                 dependencies.update(g.dependencies)
-                output_keys.update(g._output_keys)
             elif isinstance(g, Mapping):
                 layers[id(g)] = g
                 dependencies[id(g)] = set()
-                known_output_keys = False
             else:
                 raise TypeError(g)
-        if not known_output_keys:
-            output_keys = None
-        return cls(layers, dependencies, output_keys=output_keys)
+        return cls(layers, dependencies)
 
     def visualize(self, filename="dask-hlg.svg", format=None, **kwargs):
         """

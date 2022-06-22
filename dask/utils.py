@@ -1192,6 +1192,7 @@ def ensure_dict(d: Mapping[K, V], *, copy: bool = False) -> dict[K, V]:
         If True, guarantee that the return value is always a shallow copy of d;
         otherwise it may be the input itself.
     """
+    from dask.base import tokenize
     from dask.highlevelgraph import HighLevelGraph
 
     if type(d) is dict:
@@ -1201,8 +1202,31 @@ def ensure_dict(d: Mapping[K, V], *, copy: bool = False) -> dict[K, V]:
     except AttributeError:
         return dict(d)
 
-    def construct_graph(name, keys=None):
+    # "Old" Code Path
+    if False:
+        old_result = {}
+        for layer in toolz.unique(layers.values(), key=id):
+            old_result.update(layer)
+        return old_result
+
+    # Implicit Culling code path...
+    assert isinstance(d, HighLevelGraph)
+    output_layers = set()
+    for k, v in d.dependents.items():
+        if not v:
+            output_layers.add(k)
+
+    def construct_graph(name, keys=None, done=None):
         # Utility to construct a low-level graph
+
+        # Keep track of materialized layers
+        # (No need to materialize a layer if we have
+        # already handled the same layer/keys combo)
+        done = done or set()
+        token = tokenize(name, keys)
+        if token in done:
+            return {}
+        done.add(token)
 
         # Extract subset of layers required by the
         # "current" layer
@@ -1213,27 +1237,21 @@ def ensure_dict(d: Mapping[K, V], *, copy: bool = False) -> dict[K, V]:
         # layer and then update the graph recursively
         dsk, real_deps = layer.get_subgraph(keys, dep_layers)
         for dep, real_dep_keys in real_deps.items():
-            dsk.update(construct_graph(dep, real_dep_keys))
+            dsk.update(construct_graph(dep, real_dep_keys, done=done))
 
         return dsk
 
     # Construct graph recursively,
     # starting with "output" layers
     result = {}
-    assert isinstance(d, HighLevelGraph)
-    for output_layer in d._output_layers:
+    for output_layer in output_layers:
         result.update(
             construct_graph(
                 output_layer,
-                keys=d._output_keys.get(output_layer, None),
+                keys=set(layers[output_layer].get_output_keys()),
             )
         )
     return result
-
-    # result = {}
-    # for layer in toolz.unique(layers.values(), key=id):
-    #     result.update(layer)
-    # return result
 
 
 def ensure_set(s: Set[T], *, copy: bool = False) -> set[T]:
