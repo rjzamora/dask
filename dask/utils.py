@@ -24,6 +24,7 @@ from weakref import WeakValueDictionary
 
 import tlz as toolz
 
+from dask import config
 from dask.core import get_deps
 
 K = TypeVar("K")
@@ -1193,6 +1194,7 @@ def ensure_dict(d: Mapping[K, V], *, copy: bool = False) -> dict[K, V]:
         otherwise it may be the input itself.
     """
     from dask.base import tokenize
+    from dask.core import keys_in_tasks
     from dask.highlevelgraph import HighLevelGraph
 
     if type(d) is dict:
@@ -1203,7 +1205,7 @@ def ensure_dict(d: Mapping[K, V], *, copy: bool = False) -> dict[K, V]:
         return dict(d)
 
     # "Old" Code Path
-    if False:
+    if not config.get("optimization.cull.auto", False):
         old_result = {}
         for layer in toolz.unique(layers.values(), key=id):
             old_result.update(layer)
@@ -1216,8 +1218,8 @@ def ensure_dict(d: Mapping[K, V], *, copy: bool = False) -> dict[K, V]:
         if not v:
             output_layers.add(k)
 
-    def construct_graph(name, keys=None, done=None):
-        # Utility to construct a low-level graph
+    def _construct_graph(name, keys=None, done=None):
+        # Helper function to construct a low-level graph
 
         # Keep track of materialized layers
         # (No need to materialize a layer if we have
@@ -1228,16 +1230,18 @@ def ensure_dict(d: Mapping[K, V], *, copy: bool = False) -> dict[K, V]:
             return {}
         done.add(token)
 
-        # Extract subset of layers required by the
-        # "current" layer
-        dep_layers = {dname: layers[dname] for dname in d.dependencies[name]}
-        layer = layers[name]  # The "current" layer
+        # Start with the subgraph for the current layer
+        dsk = layers[name].subgraph(keys)
 
-        # Start with the subgraph for the current
-        # layer and then update the graph recursively
-        dsk, real_deps = layer.get_subgraph(keys, dep_layers)
-        for dep, real_dep_keys in real_deps.items():
-            dsk.update(construct_graph(dep, real_dep_keys, done=done))
+        # Find key dependencies in external layer
+        # dependencies, and update the graph recursively
+        dep_layers = {dname: layers[dname] for dname in d.dependencies[name]}
+        for dep, dep_layer in dep_layers.items():
+            real_dep_keys = keys_in_tasks(
+                set(dep_layer.get_output_keys()),
+                [dsk],
+            )
+            dsk.update(_construct_graph(dep, real_dep_keys, done=done))
 
         return dsk
 
@@ -1246,7 +1250,7 @@ def ensure_dict(d: Mapping[K, V], *, copy: bool = False) -> dict[K, V]:
     result = {}
     for output_layer in output_layers:
         result.update(
-            construct_graph(
+            _construct_graph(
                 output_layer,
                 keys=set(layers[output_layer].get_output_keys()),
             )

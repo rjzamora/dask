@@ -784,6 +784,34 @@ class Blockwise(Layer):
             io_deps=self.io_deps,
         )
 
+    def subgraph(self, keys):
+        # Empty keys
+        if not keys:
+            return {}
+
+        # Cull & Materialize
+        output_blocks: set[tuple[int, ...]] = set()
+        for key in keys:
+            if key[0] == self.output:
+                output_blocks.add(tuple(map(int, key[1:])))
+
+        _keys = tuple(map(blockwise_token, range(len(self.indices))))
+        dsk, _ = fuse(self.dsk, [self.output])
+        func = SubgraphCallable(dsk, self.output, _keys)
+
+        return make_blockwise_graph(
+            func,
+            self.output,
+            self.output_indices,
+            *list(toolz.concat(self.indices)),
+            new_axes=self.new_axes,
+            numblocks=self.numblocks,
+            concatenate=self.concatenate,
+            output_blocks=output_blocks,
+            dims=self.dims,
+            io_deps=self.io_deps,
+        )
+
     def cull(
         self, keys: set, all_hlg_keys: Iterable
     ) -> tuple[Layer, Mapping[Hashable, set]]:

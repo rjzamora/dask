@@ -493,6 +493,13 @@ class SimpleShuffleLayer(Layer):
             parts_out=parts_out,
         )
 
+    def subgraph(self, keys):
+        # Cull & Materialize
+        parts_out = self._keys_to_parts(keys)
+        if parts_out != set(self.parts_out):
+            return dict(self._cull(parts_out))
+        return dict(self)
+
     def cull(self, keys, all_keys):
         """Cull a SimpleShuffleLayer HighLevelGraph layer.
 
@@ -1033,6 +1040,13 @@ class BroadcastJoinLayer(Layer):
             **self.merge_kwargs,
         )
 
+    def subgraph(self, keys):
+        # Cull & Materialize
+        parts_out = self._keys_to_parts(keys)
+        if parts_out != set(self.parts_out):
+            return dict(self._cull(parts_out))
+        return dict(self)
+
     def cull(self, keys, all_keys):
         """Cull a BroadcastJoinLayer HighLevelGraph layer.
 
@@ -1498,6 +1512,13 @@ class DataFrameTreeReduction(Layer):
             tree_node_name=self.tree_node_name,
             annotations=self.annotations,
         )
+
+    def subgraph(self, keys):
+        # Cull & Materialize
+        output_partitions = self._keys_to_output_partitions(keys)
+        if output_partitions != set(self.output_partitions):
+            return dict(self._cull(output_partitions))
+        return dict(self)
 
     def cull(self, keys, all_keys):
         """Cull a DataFrameTreeReduction HighLevelGraph layer"""

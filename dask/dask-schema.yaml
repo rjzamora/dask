@@ -147,3 +147,14 @@ properties:
               comprehensible, but it comes at the cost of additional processing. If
               False, then the top-most key will be used. For advanced usage, a function
               to create the new name is also accepted.
+
+      cull:
+        type: object
+        description: Options for Dask's graph culling optimizations
+        properties:
+
+          auto:
+            type: boolean
+            description: |
+              Whether graph culling should be automatically applied
+              when HLG Layers are materialized.

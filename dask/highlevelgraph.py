@@ -77,37 +77,23 @@ class Layer(Mapping):
             config.get("collection_annotations", None)
         )
 
-    def get_subgraph(self, keys, dep_layers):
-        """Return this Layer's subgraph and external dependencies
+    def subgraph(self, keys):
+        """Return the local subgraph required to produce ``keys``
 
         Parameters
         ----------
         keys : Iterable[Hashable]
             List of keys required by the Layer.
-        dep_layers : Mapping[str, Layer]
-            External layers that the current Layer is known
-            to depend on.
 
         Returns
         -------
         dsk: dict
-            Materialized subgraph for the current Layer.
-        key_deps: Mapping[str, Iterable]
-            External keys required by the current Layer.
+            Materialized Layer subgraph.
         """
         from dask.optimization import cull
 
-        # Materialize & cull
-        # TODO: Can we use the `dependencies` returned by cull?
-        dsk, _ = cull(dict(self), keys)
-
-        # Extract external dependencies
-        key_deps = {}
-        for dep, dep_layer in dep_layers.items():
-            layer_dep_keys = set(dep_layer.get_output_keys())
-            key_deps[dep] = keys_in_tasks(layer_dep_keys, [dsk])
-
-        return dsk, key_deps
+        # By default, we convert to a dict and then cull
+        return cull(dict(self), keys)[0]
 
     @abc.abstractmethod
     def is_materialized(self) -> bool:
@@ -749,6 +735,14 @@ class HighLevelGraph(Mapping):
         return cls(layers, deps)
 
     def __getitem__(self, key):
+        # Must materialize the full HLG if we are doing
+        # "auto culling" (This seems to be the primary
+        # downside to auto culling)
+        if config.get("optimization.cull.auto", False):
+            if not hasattr(self, "_cached_dsk"):
+                self._cached_dsk = ensure_dict(self)
+            return self._cached_dsk[key]
+
         # Attempt O(1) direct access first, under the assumption that layer names match
         # either the keys (Scalar, Item, Delayed) or the first element of the key tuples
         # (Array, Bag, DataFrame, Series). This assumption is not always true.
