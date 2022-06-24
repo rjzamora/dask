@@ -95,6 +95,25 @@ class Layer(Mapping):
         # By default, we convert to a dict and then cull
         return cull(dict(self), keys)[0]
 
+    def subgraph_dependencies(
+        self,
+        output_keys: Set,
+        subgraph: Mapping,
+        layer_dependencies: Mapping[str, Layer],
+    ) -> Mapping[str, Set]:
+        """Return external key dependencies for this layer"""
+
+        # Default implementation ignores `output_keys`, but
+        # custom Layers may know the dependency keys from
+        # the output keys alone
+        return {
+            dep: keys_in_tasks(
+                set(dep_layer.get_output_keys()),
+                [subgraph],
+            )
+            for dep, dep_layer in layer_dependencies.items()
+        }
+
     @abc.abstractmethod
     def is_materialized(self) -> bool:
         """Return whether the layer is materialized or not"""

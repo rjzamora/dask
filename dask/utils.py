@@ -1194,7 +1194,6 @@ def ensure_dict(d: Mapping[K, V], *, copy: bool = False) -> dict[K, V]:
         otherwise it may be the input itself.
     """
     from dask.base import tokenize
-    from dask.core import keys_in_tasks
     from dask.highlevelgraph import HighLevelGraph
 
     if type(d) is dict:
@@ -1235,13 +1234,14 @@ def ensure_dict(d: Mapping[K, V], *, copy: bool = False) -> dict[K, V]:
 
         # Find key dependencies in external layer
         # dependencies, and update the graph recursively
-        dep_layers = {dname: layers[dname] for dname in d.dependencies[name]}
-        for dep, dep_layer in dep_layers.items():
-            real_dep_keys = keys_in_tasks(
-                set(dep_layer.get_output_keys()),
-                [dsk],
+        for dep, dep_keys in (
+            layers[name]
+            .subgraph_dependencies(
+                keys, dsk, {dname: layers[dname] for dname in d.dependencies[name]}
             )
-            dsk.update(_construct_graph(dep, real_dep_keys, done=done))
+            .items()
+        ):
+            dsk.update(_construct_graph(dep, dep_keys, done=done))
 
         return dsk
 
