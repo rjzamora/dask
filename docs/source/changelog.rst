@@ -1,6 +1,94 @@
 Changelog
 =========
 
+.. _v2022.6.1:
+
+2022.6.1
+--------
+
+Released on June 24, 2022
+
+Enhancements
+^^^^^^^^^^^^
+- Dask in pyodide (:pr:`9053`) `Ian Rose`_
+- Create ``dask.utils.show_versions`` (:pr:`9144`) `Sultan Orazbayev`_
+- Better error message for unsupported numpy operations on dask.dataframe objects. (:pr:`9201`) `Julia Signell`_
+- Add ``allow_rechunk`` kwarg to ``dask.array.overlap`` function (:pr:`7776`) `Genevieve Buckley`_
+- Add minutes and hours to ``dask.utils.format_time`` (:pr:`9116`) `Matthew Rocklin`_
+- More retries when writing parquet to remote filesystem (:pr:`9175`) `Ian Rose`_
+
+Bug Fixes
+^^^^^^^^^
+- Timedelta deterministic hashing (:pr:`9213`) `Fabien Aulaire`_
+- Enum deterministic hashing (:pr:`9212`) `Fabien Aulaire`_
+- ``shuffle_group()``: avoid converting to arrays (:pr:`9157`) `Mads R. B. Kristensen`_
+
+Deprecations
+^^^^^^^^^^^^
+- Deprecate extra ``format_time`` utility (:pr:`9184`) `James Bourbeau`_
+
+Documentation
+^^^^^^^^^^^^^
+- Better SEO for 10 Minutes to Dask (:pr:`9182`) `Sarah Charlotte Johnson`_
+- Better SEO for Delayed and Best Practices (:pr:`9194`) `Sarah Charlotte Johnson`_
+- Include known inconsistency in DataFrame ``str.split`` accessor docstring  (:pr:`9177`) `Richard Pelgrim`_
+- Add ``inconsistencies`` keyword to ``derived_from`` (:pr:`9192`) `Richard Pelgrim`_
+- Add missing ``append`` in ``delayed`` best practices example (:pr:`9202`) `Ben`_
+- Fix indentation in Best Practices (:pr:`9196`) `Sarah Charlotte Johnson`_
+- Add link to `Genevieve Buckley`_'s blog on chunk sizes (:pr:`9199`) `Pavithra Eswaramoorthy`_
+- Update ``to_csv`` docstring (:pr:`9094`) `Sarah Charlotte Johnson`_
+
+Maintenance
+^^^^^^^^^^^
+- Update versioneer: change from using ``SafeConfigParser`` to ``ConfigParser`` (:pr:`9205`) `Thomas A Caswell`_
+- Remove ipython hack in CI(:pr:`9200`) `crusaderky`_
+
+
+.. _v2022.6.0:
+
+2022.6.0
+--------
+
+Released on June 10, 2022
+
+Enhancements
+^^^^^^^^^^^^
+- Add feature to show names of layer dependencies in HLG JupyterLab repr (:pr:`9081`) `Angelos Omirolis`_
+- Add arrow schema extraction dispatch (:pr:`9169`) `GALI PREM SAGAR`_
+- Add ``sort_results`` argument to ``assert_eq`` (:pr:`9130`) `Pavithra Eswaramoorthy`_
+- Add weeks to ``parse_timedelta`` (:pr:`9168`) `Matthew Rocklin`_
+- Warn that cloudpickle is not always deterministic (:pr:`9148`) `Pavithra Eswaramoorthy`_
+- Switch parquet default engine (:pr:`9140`) `Jim Crist-Harif`_
+- Use deterministic hashing with ``_iLocIndexer`` /  ``_LocIndexer`` (:pr:`9108`) `Fabien Aulaire`_
+- Enfore consistent schema in ``to_parquet`` pyarrow (:pr:`9131`) `Jim Crist-Harif`_
+
+Bug Fixes
+^^^^^^^^^
+- Fix ``pyarrow.StringArray`` pickle (:pr:`9170`) `Jim Crist-Harif`_
+- Fix parallel metadata collection in pyarrow engine (:pr:`9165`) `Richard (Rick) Zamora`_
+- Improve ``pyarrow`` partitioning logic (:pr:`9147`) `James Bourbeau`_
+- ``pyarrow`` 8.0 partitioning fix (:pr:`9143`) `James Bourbeau`_
+
+Documentation
+^^^^^^^^^^^^^
+- Better SEO for Installing Dask and Dask DataFrame Best Practices (:pr:`9178`) `Sarah Charlotte Johnson`_
+- Update logos page in docs (:pr:`9167`) `Sarah Charlotte Johnson`_
+- Add example using pandas Series to ``map_partition`` doctring (:pr:`9161`) `Alex-JG3`_
+- Update docs theme for rebranding (:pr:`9160`) `Sarah Charlotte Johnson`_
+- Better SEO for docs on Dask DataFrames (:pr:`9128`) `Sarah Charlotte Johnson`_
+
+Maintenance
+^^^^^^^^^^^
+- Remove ensure_file from recommended practice for downstream libraries (:pr:`9171`) `Matthew Rocklin`_
+- Test round-tripping DataFrame parquet I/O including pyspark (:pr:`9156`) `Ian Rose`_
+- Try disabling HDF5 locking (:pr:`9154`) `Ian Rose`_
+- Link best practices to DataFrame-parquet (:pr:`9150`) `Tom Augspurger`_
+- Fix typo in ``map_partitions`` ``func`` parameter description (:pr:`9149`) `Christopher Akiki`_
+- Un-``xfail`` ``test_groupby_grouper_dispatch`` (:pr:`9139`) `GALI PREM SAGAR`_
+- Temporarily import cleanup fixture from distributed (:pr:`9138`) `James Bourbeau`_
+- Simplify partitioning logic in pyarrow parquet engine (:pr:`9041`) `Richard (Rick) Zamora`_
+
+
 .. _v2022.05.2:
 
 2022.05.2
@@ -249,6 +337,11 @@ Maintenance
 
 Released on April 1, 2022
 
+.. note::
+
+    This is the first release with support for Python 3.10
+
+
 New Features
 ^^^^^^^^^^^^
 - Add Python 3.10 support (:pr:`8566`) `James Bourbeau`_
@@ -424,6 +517,10 @@ Maintenance
 ---------
 
 Released on February 11, 2022
+
+.. note::
+
+    This is the last release with support for Python 3.7
 
 New Features
 ^^^^^^^^^^^^
@@ -5604,3 +5701,10 @@ Other
 .. _`Eray Aslan`: https://github.com/erayaslan
 .. _`Ben Beasley`: https://github.com/musicinmybrain
 .. _`Ryan Russell`: https://github.com/ryanrussell
+.. _`Angelos Omirolis`: https://github.com/aomirolis
+.. _`Fabien Aulaire`: https://github.com/faulaire
+.. _`Alex-JG3`: https://github.com/Alex-JG3
+.. _`Christopher Akiki`: https://github.com/cakiki
+.. _`Sultan Orazbayev`: https://github.com/SultanOrazbayev
+.. _`Richard Pelgrim`: https://github.com/rrpelgrim
+.. _`Ben`: https://github.com/benjaminhduncan

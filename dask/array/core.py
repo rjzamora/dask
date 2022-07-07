@@ -31,7 +31,7 @@ from fsspec import get_mapper
 from tlz import accumulate, concat, first, frequencies, groupby, partition
 from tlz.curried import pluck
 
-from dask import compute, config, core, threaded
+from dask import compute, config, core
 from dask.array import chunk
 from dask.array.chunk import getitem
 from dask.array.chunk_types import is_valid_array_chunk, is_valid_chunk_type
@@ -49,6 +49,7 @@ from dask.base import (
     compute_as_if_collection,
     dont_optimize,
     is_dask_collection,
+    named_schedulers,
     persist,
     tokenize,
 )
@@ -83,6 +84,8 @@ from dask.utils import (
     typename,
 )
 from dask.widgets import get_template
+
+DEFAULT_GET = named_schedulers.get("threads", named_schedulers["sync"])
 
 config.update_defaults({"array": {"chunk-size": "128MiB", "rechunk-threshold": 4}})
 
@@ -1406,7 +1409,7 @@ class Array(DaskMethodsMixin):
     __dask_optimize__ = globalmethod(
         optimize, key="array_optimize", falsey=dont_optimize
     )
-    __dask_scheduler__ = staticmethod(threaded.get)
+    __dask_scheduler__ = staticmethod(DEFAULT_GET)
 
     def __dask_postcompute__(self):
         return finalize, ()
@@ -1621,7 +1624,7 @@ class Array(DaskMethodsMixin):
             cbytes = None
         elif not math.isnan(self.nbytes):
             nbytes = format_bytes(self.nbytes)
-            cbytes = format_bytes(np.prod(self.chunksize) * self.dtype.itemsize)
+            cbytes = format_bytes(math.prod(self.chunksize) * self.dtype.itemsize)
         else:
             nbytes = "unknown"
             cbytes = "unknown"
@@ -3014,7 +3017,7 @@ def _compute_multiplier(limit: int, dtype, largest_block: int, result):
         limit
         / dtype.itemsize
         / largest_block
-        / np.prod(list(r if r != 0 else 1 for r in result.values()))
+        / math.prod(r for r in result.values() if r)
     )
 
 
@@ -3080,8 +3083,8 @@ def auto_chunks(chunks, shape, limit, dtype, previous_chunks=None):
 
     limit = max(1, limit)
 
-    largest_block = np.prod(
-        [cs if isinstance(cs, Number) else max(cs) for cs in chunks if cs != "auto"]
+    largest_block = math.prod(
+        cs if isinstance(cs, Number) else max(cs) for cs in chunks if cs != "auto"
     )
 
     if previous_chunks:
@@ -3828,7 +3831,7 @@ def unify_chunks(*args, **kwargs):
             nameinds.append((a, ind))
 
     chunkss = broadcast_dimensions(nameinds, blockdim_dict, consolidate=common_blockdim)
-    nparts = np.prod(list(map(len, chunkss.values())))
+    nparts = math.prod(map(len, chunkss.values()))
 
     if warn and nparts and nparts >= max_parts * 10:
         warnings.warn(
@@ -5683,7 +5686,7 @@ class BlockView:
         """
         The total number of blocks in the array.
         """
-        return np.prod(self.shape)
+        return math.prod(self.shape)
 
     @property
     def shape(self) -> tuple[int, ...]:
