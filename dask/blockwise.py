@@ -1717,6 +1717,12 @@ def fuse_roots(graph: HighLevelGraph, keys: list):
     Blockwise
     fuse
     """
+
+    # Skip fuse-roots optimization
+    # (Not clear it works anyway)
+    if isinstance(graph, HighLevelGraph):
+        return graph
+
     layers = ensure_dict(graph.layers, copy=True)
     dependencies = ensure_dict(graph.dependencies, copy=True)
     dependents = reverse_dict(dependencies)

@@ -18,35 +18,24 @@ from dask.widgets import get_template
 def compute_layer_dependencies(layers):
     """Returns the dependencies between layers"""
 
+    subgraphs = {k: v.subgraph(v.get_output_keys()) for k, v in layers.items()}
+
     def _find_layer_containing_key(key):
-        for k, v in layers.items():
+        for k, v in subgraphs.items():
             if key in v:
                 return k
         raise RuntimeError(f"{repr(key)} not found")
 
-    all_keys = {key for layer in layers.values() for key in layer}
+    all_keys = {key for subgraph in subgraphs.values() for key in subgraph.keys()}
+
     ret = {k: set() for k in layers}
-    for k, v in layers.items():
+    for k, v in subgraphs.items():
         for key in keys_in_tasks(all_keys - v.keys(), v.values()):
             ret[k].add(_find_layer_containing_key(key))
     return ret
 
 
-class Layer(Mapping):
-    """High level graph layer
-
-    This abstract class establish a protocol for high level graph layers.
-
-    The main motivation of a layer is to represent a collection of tasks
-    symbolically in order to speedup a series of operations significantly.
-    Ideally, a layer should stay in this symbolic state until execution
-    but in practice some operations will force the layer to generate all
-    its internal tasks. We say that the layer has been materialized.
-
-    Most of the default implementations in this class will materialize the
-    layer. It is up to derived classes to implement non-materializing
-    implementations.
-    """
+class Layer:
 
     annotations: Mapping[str, Any] | None
     collection_annotations: Mapping[str, Any] | None
@@ -90,10 +79,7 @@ class Layer(Mapping):
         dsk: dict
             Materialized Layer subgraph.
         """
-        from dask.optimization import cull
-
-        # By default, we convert to a dict and then cull
-        return cull(dict(self), keys)[0]
+        raise NotImplementedError
 
     def subgraph_dependencies(
         self,
@@ -117,7 +103,8 @@ class Layer(Mapping):
     @abc.abstractmethod
     def is_materialized(self) -> bool:
         """Return whether the layer is materialized or not"""
-        return True
+        raise NotImplementedError
+        # return True
 
     @abc.abstractmethod
     def get_output_keys(self) -> Set:
@@ -134,72 +121,72 @@ class Layer(Mapping):
         keys: Set
             All output keys
         """
-        return self.keys()  # this implementation will materialize the graph
+        raise NotImplementedError
 
-    def cull(
-        self, keys: set, all_hlg_keys: Iterable
-    ) -> tuple[Layer, Mapping[Hashable, set]]:
-        """Remove unnecessary tasks from the layer
+    # def cull(
+    #     self, keys: set, all_hlg_keys: Iterable
+    # ) -> tuple[Layer, Mapping[Hashable, set]]:
+    #     """Remove unnecessary tasks from the layer
 
-        In other words, return a new Layer with only the tasks required to
-        calculate `keys` and a map of external key dependencies.
+    #     In other words, return a new Layer with only the tasks required to
+    #     calculate `keys` and a map of external key dependencies.
 
-        Examples
-        --------
-        >>> inc = lambda x: x + 1
-        >>> add = lambda x, y: x + y
-        >>> d = MaterializedLayer({'x': 1, 'y': (inc, 'x'), 'out': (add, 'x', 10)})
-        >>> _, deps = d.cull({'out'}, d.keys())
-        >>> deps
-        {'out': {'x'}, 'x': set()}
+    #     Examples
+    #     --------
+    #     >>> inc = lambda x: x + 1
+    #     >>> add = lambda x, y: x + y
+    #     >>> d = MaterializedLayer({'x': 1, 'y': (inc, 'x'), 'out': (add, 'x', 10)})
+    #     >>> _, deps = d.cull({'out'}, d.keys())
+    #     >>> deps
+    #     {'out': {'x'}, 'x': set()}
 
-        Returns
-        -------
-        layer: Layer
-            Culled layer
-        deps: Map
-            Map of external key dependencies
-        """
+    #     Returns
+    #     -------
+    #     layer: Layer
+    #         Culled layer
+    #     deps: Map
+    #         Map of external key dependencies
+    #     """
 
-        if len(keys) == len(self):
-            # Nothing to cull if preserving all existing keys
-            return (
-                self,
-                {k: self.get_dependencies(k, all_hlg_keys) for k in self.keys()},
-            )
+    #     if len(keys) == len(self):
+    #         # Nothing to cull if preserving all existing keys
+    #         return (
+    #             self,
+    #             {k: self.get_dependencies(k, all_hlg_keys) for k in self.keys()},
+    #         )
 
-        ret_deps = {}
-        seen = set()
-        out = {}
-        work = keys.copy()
-        while work:
-            k = work.pop()
-            out[k] = self[k]
-            ret_deps[k] = self.get_dependencies(k, all_hlg_keys)
-            for d in ret_deps[k]:
-                if d not in seen:
-                    if d in self:
-                        seen.add(d)
-                        work.add(d)
+    #     ret_deps = {}
+    #     seen = set()
+    #     out = {}
+    #     work = keys.copy()
+    #     while work:
+    #         k = work.pop()
+    #         out[k] = self[k]
+    #         ret_deps[k] = self.get_dependencies(k, all_hlg_keys)
+    #         for d in ret_deps[k]:
+    #             if d not in seen:
+    #                 if d in self:
+    #                     seen.add(d)
+    #                     work.add(d)
 
-        return MaterializedLayer(out, annotations=self.annotations), ret_deps
+    #     return MaterializedLayer(out, annotations=self.annotations), ret_deps
 
-    def get_dependencies(self, key: Hashable, all_hlg_keys: Iterable) -> set:
-        """Get dependencies of `key` in the layer
+    # def get_dependencies(self, key: Hashable, all_hlg_keys: Iterable) -> set:
+    #     """Get dependencies of `key` in the layer
 
-        Parameters
-        ----------
-        key: Hashable
-            The key to find dependencies of
-        all_hlg_keys: Iterable
-            All keys in the high level graph.
+    #     Parameters
+    #     ----------
+    #     key: Hashable
+    #         The key to find dependencies of
+    #     all_hlg_keys: Iterable
+    #         All keys in the high level graph.
 
-        Returns
-        -------
-        deps: set
-            A set of dependencies
-        """
-        return keys_in_tasks(all_hlg_keys, [self[key]])
+    #     Returns
+    #     -------
+    #     deps: set
+    #         A set of dependencies
+    #     """
+    #     return keys_in_tasks(all_hlg_keys, [self[key]])
 
     def __dask_distributed_annotations_pack__(
         self, annotations: Mapping[str, Any] | None = None
@@ -279,80 +266,80 @@ class Layer(Mapping):
             v.update(annotations.get(k, {}))
         annotations.update(expanded)
 
-    def clone(
-        self,
-        keys: set,
-        seed: Hashable,
-        bind_to: Hashable = None,
-    ) -> tuple[Layer, bool]:
-        """Clone selected keys in the layer, as well as references to keys in other
-        layers
+    # def clone(
+    #     self,
+    #     keys: set,
+    #     seed: Hashable,
+    #     bind_to: Hashable = None,
+    # ) -> tuple[Layer, bool]:
+    #     """Clone selected keys in the layer, as well as references to keys in other
+    #     layers
 
-        Parameters
-        ----------
-        keys
-            Keys to be replaced. This never includes keys not listed by
-            :meth:`get_output_keys`. It must also include any keys that are outside
-            of this layer that may be referenced by it.
-        seed
-            Common hashable used to alter the keys; see :func:`dask.base.clone_key`
-        bind_to
-            Optional key to bind the leaf nodes to. A leaf node here is one that does
-            not reference any replaced keys; in other words it's a node where the
-            replacement graph traversal stops; it may still have dependencies on
-            non-replaced nodes.
-            A bound node will not be computed until after ``bind_to`` has been computed.
+    #     Parameters
+    #     ----------
+    #     keys
+    #         Keys to be replaced. This never includes keys not listed by
+    #         :meth:`get_output_keys`. It must also include any keys that are outside
+    #         of this layer that may be referenced by it.
+    #     seed
+    #         Common hashable used to alter the keys; see :func:`dask.base.clone_key`
+    #     bind_to
+    #         Optional key to bind the leaf nodes to. A leaf node here is one that does
+    #         not reference any replaced keys; in other words it's a node where the
+    #         replacement graph traversal stops; it may still have dependencies on
+    #         non-replaced nodes.
+    #         A bound node will not be computed until after ``bind_to`` has been computed.
 
-        Returns
-        -------
-        - New layer
-        - True if the ``bind_to`` key was injected anywhere; False otherwise
+    #     Returns
+    #     -------
+    #     - New layer
+    #     - True if the ``bind_to`` key was injected anywhere; False otherwise
 
-        Notes
-        -----
-        This method should be overridden by subclasses to avoid materializing the layer.
-        """
-        from dask.graph_manipulation import chunks
+    #     Notes
+    #     -----
+    #     This method should be overridden by subclasses to avoid materializing the layer.
+    #     """
+    #     from dask.graph_manipulation import chunks
 
-        is_leaf: bool
+    #     is_leaf: bool
 
-        def clone_value(o):
-            """Variant of distributed.utils_comm.subs_multiple, which allows injecting
-            bind_to
-            """
-            nonlocal is_leaf
+    #     def clone_value(o):
+    #         """Variant of distributed.utils_comm.subs_multiple, which allows injecting
+    #         bind_to
+    #         """
+    #         nonlocal is_leaf
 
-            typ = type(o)
-            if typ is tuple and o and callable(o[0]):
-                return (o[0],) + tuple(clone_value(i) for i in o[1:])
-            elif typ is list:
-                return [clone_value(i) for i in o]
-            elif typ is dict:
-                return {k: clone_value(v) for k, v in o.items()}
-            else:
-                try:
-                    if o not in keys:
-                        return o
-                except TypeError:
-                    return o
-                is_leaf = False
-                return clone_key(o, seed)
+    #         typ = type(o)
+    #         if typ is tuple and o and callable(o[0]):
+    #             return (o[0],) + tuple(clone_value(i) for i in o[1:])
+    #         elif typ is list:
+    #             return [clone_value(i) for i in o]
+    #         elif typ is dict:
+    #             return {k: clone_value(v) for k, v in o.items()}
+    #         else:
+    #             try:
+    #                 if o not in keys:
+    #                     return o
+    #             except TypeError:
+    #                 return o
+    #             is_leaf = False
+    #             return clone_key(o, seed)
 
-        dsk_new = {}
-        bound = False
+    #     dsk_new = {}
+    #     bound = False
 
-        for key, value in self.items():
-            if key in keys:
-                key = clone_key(key, seed)
-                is_leaf = True
-                value = clone_value(value)
-                if bind_to is not None and is_leaf:
-                    value = (chunks.bind, value, bind_to)
-                    bound = True
+    #     for key, value in self.items():
+    #         if key in keys:
+    #             key = clone_key(key, seed)
+    #             is_leaf = True
+    #             value = clone_value(value)
+    #             if bind_to is not None and is_leaf:
+    #                 value = (chunks.bind, value, bind_to)
+    #                 bound = True
 
-            dsk_new[key] = value
+    #         dsk_new[key] = value
 
-        return MaterializedLayer(dsk_new), bound
+    #     return MaterializedLayer(dsk_new), bound
 
     def __dask_distributed_pack__(
         self,
@@ -395,79 +382,80 @@ class Layer(Mapping):
         state: Object serializable by msgpack
             Scheduler compatible state of the layer
         """
-        from distributed.client import Future
-        from distributed.utils import CancelledError
-        from distributed.utils_comm import subs_multiple, unpack_remotedata
-        from distributed.worker import dumps_task
+        raise NotImplementedError
+        # from distributed.client import Future
+        # from distributed.utils import CancelledError
+        # from distributed.utils_comm import subs_multiple, unpack_remotedata
+        # from distributed.worker import dumps_task
 
-        dsk = dict(self)
+        # dsk = dict(self)
 
-        # Find aliases not in `client_keys` and substitute all matching keys
-        # with its Future
-        future_aliases = {
-            k: v
-            for k, v in dsk.items()
-            if isinstance(v, Future) and k not in client_keys
-        }
-        if future_aliases:
-            dsk = subs_multiple(dsk, future_aliases)
+        # # Find aliases not in `client_keys` and substitute all matching keys
+        # # with its Future
+        # future_aliases = {
+        #     k: v
+        #     for k, v in dsk.items()
+        #     if isinstance(v, Future) and k not in client_keys
+        # }
+        # if future_aliases:
+        #     dsk = subs_multiple(dsk, future_aliases)
 
-        # Remove `Future` objects from graph and note any future dependencies
-        dsk2 = {}
-        fut_deps = {}
-        for k, v in dsk.items():
-            dsk2[k], futs = unpack_remotedata(v, byte_keys=True)
-            if futs:
-                fut_deps[k] = futs
-        dsk = dsk2
+        # # Remove `Future` objects from graph and note any future dependencies
+        # dsk2 = {}
+        # fut_deps = {}
+        # for k, v in dsk.items():
+        #     dsk2[k], futs = unpack_remotedata(v, byte_keys=True)
+        #     if futs:
+        #         fut_deps[k] = futs
+        # dsk = dsk2
 
-        # Check that any collected futures are valid
-        unpacked_futures = set.union(*fut_deps.values()) if fut_deps else set()
-        for future in unpacked_futures:
-            if future.client is not client:
-                raise ValueError(
-                    "Inputs contain futures that were created by another client."
-                )
-            if stringify(future.key) not in client.futures:
-                raise CancelledError(stringify(future.key))
+        # # Check that any collected futures are valid
+        # unpacked_futures = set.union(*fut_deps.values()) if fut_deps else set()
+        # for future in unpacked_futures:
+        #     if future.client is not client:
+        #         raise ValueError(
+        #             "Inputs contain futures that were created by another client."
+        #         )
+        #     if stringify(future.key) not in client.futures:
+        #         raise CancelledError(stringify(future.key))
 
-        # Calculate dependencies without re-calculating already known dependencies
-        # - Start with known dependencies
-        dependencies = ensure_dict(known_key_dependencies, copy=True)
-        # - Remove aliases for any tasks that depend on both an alias and a future.
-        #   These can only be found in the known_key_dependencies cache, since
-        #   any dependencies computed in this method would have already had the
-        #   aliases removed.
-        if future_aliases:
-            alias_keys = set(future_aliases)
-            dependencies = {k: v - alias_keys for k, v in dependencies.items()}
-        # - Add in deps for any missing keys
-        missing_keys = dsk.keys() - dependencies.keys()
+        # # Calculate dependencies without re-calculating already known dependencies
+        # # - Start with known dependencies
+        # dependencies = ensure_dict(known_key_dependencies, copy=True)
+        # # - Remove aliases for any tasks that depend on both an alias and a future.
+        # #   These can only be found in the known_key_dependencies cache, since
+        # #   any dependencies computed in this method would have already had the
+        # #   aliases removed.
+        # if future_aliases:
+        #     alias_keys = set(future_aliases)
+        #     dependencies = {k: v - alias_keys for k, v in dependencies.items()}
+        # # - Add in deps for any missing keys
+        # missing_keys = dsk.keys() - dependencies.keys()
 
-        dependencies.update(
-            (k, keys_in_tasks(all_hlg_keys, [dsk[k]], as_list=False))
-            for k in missing_keys
-        )
-        # - Add in deps for any tasks that depend on futures
-        for k, futures in fut_deps.items():
-            if futures:
-                d = ensure_set(dependencies[k], copy=True)
-                d.update(f.key for f in futures)
-                dependencies[k] = d
+        # dependencies.update(
+        #     (k, keys_in_tasks(all_hlg_keys, [dsk[k]], as_list=False))
+        #     for k in missing_keys
+        # )
+        # # - Add in deps for any tasks that depend on futures
+        # for k, futures in fut_deps.items():
+        #     if futures:
+        #         d = ensure_set(dependencies[k], copy=True)
+        #         d.update(f.key for f in futures)
+        #         dependencies[k] = d
 
-        # The scheduler expect all keys to be strings
-        dependencies = {
-            stringify(k): {stringify(dep) for dep in deps}
-            for k, deps in dependencies.items()
-        }
+        # # The scheduler expect all keys to be strings
+        # dependencies = {
+        #     stringify(k): {stringify(dep) for dep in deps}
+        #     for k, deps in dependencies.items()
+        # }
 
-        merged_hlg_keys = all_hlg_keys | dsk.keys()
-        dsk = {
-            stringify(k): stringify(v, exclusive=merged_hlg_keys)
-            for k, v in dsk.items()
-        }
-        dsk = toolz.valmap(dumps_task, dsk)
-        return {"dsk": dsk, "dependencies": dependencies}
+        # merged_hlg_keys = all_hlg_keys | dsk.keys()
+        # dsk = {
+        #     stringify(k): stringify(v, exclusive=merged_hlg_keys)
+        #     for k, v in dsk.items()
+        # }
+        # dsk = toolz.valmap(dumps_task, dsk)
+        # return {"dsk": dsk, "dependencies": dependencies}
 
     @classmethod
     def __dask_distributed_unpack__(
@@ -503,11 +491,12 @@ class Layer(Mapping):
             layer_deps: Mapping[str, set]
                 Dependencies of each key in `layer_dsk`
         """
-        return {"dsk": state["dsk"], "deps": state["dependencies"]}
+        raise NotImplementedError
+        # return {"dsk": state["dsk"], "deps": state["dependencies"]}
 
-    def __reduce__(self):
-        """Default serialization implementation, which materializes the Layer"""
-        return (MaterializedLayer, (dict(self),))
+    # def __reduce__(self):
+    #     """Default serialization implementation, which materializes the Layer"""
+    #     return (MaterializedLayer, (dict(self),))
 
     def __copy__(self):
         """Default shallow copy implementation"""
@@ -574,23 +563,28 @@ class MaterializedLayer(Layer):
         super().__init__(annotations=annotations)
         self.mapping = mapping
 
-    def __contains__(self, k):
-        return k in self.mapping
+    def subgraph(self, keys):
+        from dask.optimization import cull
 
-    def __getitem__(self, k):
-        return self.mapping[k]
+        return cull(self.mapping, list(keys))[0]
 
-    def __iter__(self):
-        return iter(self.mapping)
+    # def __contains__(self, k):
+    #     return k in self.mapping
 
-    def __len__(self):
-        return len(self.mapping)
+    # def __getitem__(self, k):
+    #     return self.mapping[k]
+
+    # def __iter__(self):
+    #     return iter(self.mapping)
+
+    # def __len__(self):
+    #     return len(self.mapping)
 
     def is_materialized(self):
         return True
 
     def get_output_keys(self):
-        return self.keys()
+        return self.mapping.keys()
 
 
 class HighLevelGraph(Mapping):
@@ -667,7 +661,7 @@ class HighLevelGraph(Mapping):
 
     def __init__(
         self,
-        layers: Mapping[str, Mapping],
+        layers: Mapping[str, Layer],
         dependencies: Mapping[str, Set],
         key_dependencies: dict[Hashable, Set] | None = None,
     ):
@@ -961,58 +955,61 @@ class HighLevelGraph(Mapping):
         return ret
 
     def cull(self, keys: Iterable) -> HighLevelGraph:
-        """Return new HighLevelGraph with only the tasks required to calculate keys.
+        return self
 
-        In other words, remove unnecessary tasks from dask.
+    # def cull(self, keys: Iterable) -> HighLevelGraph:
+    #     """Return new HighLevelGraph with only the tasks required to calculate keys.
 
-        Parameters
-        ----------
-        keys
-            iterable of keys or nested list of keys such as the output of
-            ``__dask_keys__()``
+    #     In other words, remove unnecessary tasks from dask.
 
-        Returns
-        -------
-        hlg: HighLevelGraph
-            Culled high level graph
-        """
-        keys_set = set(flatten(keys))
+    #     Parameters
+    #     ----------
+    #     keys
+    #         iterable of keys or nested list of keys such as the output of
+    #         ``__dask_keys__()``
 
-        all_ext_keys = self.get_all_external_keys()
-        ret_layers: dict = {}
-        ret_key_deps: dict = {}
-        for layer_name in reversed(self._toposort_layers()):
-            layer = self.layers[layer_name]
-            # Let's cull the layer to produce its part of `keys`.
-            # Note: use .intersection rather than & because the RHS is
-            # a collections.abc.Set rather than a real set, and using &
-            # would take time proportional to the size of the LHS, which
-            # if there is no culling can be much bigger than the RHS.
-            output_keys = keys_set.intersection(layer.get_output_keys())
-            if output_keys:
-                culled_layer, culled_deps = layer.cull(output_keys, all_ext_keys)
-                # Update `keys` with all layer's external key dependencies, which
-                # are all the layer's dependencies (`culled_deps`) excluding
-                # the layer's output keys.
-                external_deps = set()
-                for d in culled_deps.values():
-                    external_deps |= d
-                external_deps -= culled_layer.get_output_keys()
-                keys_set |= external_deps
+    #     Returns
+    #     -------
+    #     hlg: HighLevelGraph
+    #         Culled high level graph
+    #     """
+    #     keys_set = set(flatten(keys))
 
-                # Save the culled layer and its key dependencies
-                ret_layers[layer_name] = culled_layer
-                ret_key_deps.update(culled_deps)
+    #     all_ext_keys = self.get_all_external_keys()
+    #     ret_layers: dict = {}
+    #     ret_key_deps: dict = {}
+    #     for layer_name in reversed(self._toposort_layers()):
+    #         layer = self.layers[layer_name]
+    #         # Let's cull the layer to produce its part of `keys`.
+    #         # Note: use .intersection rather than & because the RHS is
+    #         # a collections.abc.Set rather than a real set, and using &
+    #         # would take time proportional to the size of the LHS, which
+    #         # if there is no culling can be much bigger than the RHS.
+    #         output_keys = keys_set.intersection(layer.get_output_keys())
+    #         if output_keys:
+    #             culled_layer, culled_deps = layer.cull(output_keys, all_ext_keys)
+    #             # Update `keys` with all layer's external key dependencies, which
+    #             # are all the layer's dependencies (`culled_deps`) excluding
+    #             # the layer's output keys.
+    #             external_deps = set()
+    #             for d in culled_deps.values():
+    #                 external_deps |= d
+    #             external_deps -= culled_layer.get_output_keys()
+    #             keys_set |= external_deps
 
-        # Converting dict_keys to a real set lets Python optimise the set
-        # intersection to iterate over the smaller of the two sets.
-        ret_layers_keys = set(ret_layers.keys())
-        ret_dependencies = {
-            layer_name: self.dependencies[layer_name] & ret_layers_keys
-            for layer_name in ret_layers
-        }
+    #             # Save the culled layer and its key dependencies
+    #             ret_layers[layer_name] = culled_layer
+    #             ret_key_deps.update(culled_deps)
 
-        return HighLevelGraph(ret_layers, ret_dependencies, ret_key_deps)
+    #     # Converting dict_keys to a real set lets Python optimise the set
+    #     # intersection to iterate over the smaller of the two sets.
+    #     ret_layers_keys = set(ret_layers.keys())
+    #     ret_dependencies = {
+    #         layer_name: self.dependencies[layer_name] & ret_layers_keys
+    #         for layer_name in ret_layers
+    #     }
+
+    #     return HighLevelGraph(ret_layers, ret_dependencies, ret_key_deps)
 
     def cull_layers(self, layers: Iterable[str]) -> HighLevelGraph:
         """Return a new HighLevelGraph with only the given layers and their
