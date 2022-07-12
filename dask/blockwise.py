@@ -1689,6 +1689,8 @@ def fuse_roots(graph: HighLevelGraph, keys: list):
     Blockwise
     fuse
     """
+    from dask.layers import LeafTask
+
     layers = ensure_dict(graph.layers, copy=True)
     dependencies = ensure_dict(graph.dependencies, copy=True)
     dependents = reverse_dict(dependencies)
@@ -1698,6 +1700,7 @@ def fuse_roots(graph: HighLevelGraph, keys: list):
         if (
             isinstance(layer, Blockwise)
             and len(deps) > 1
+            and all(isinstance(layers[dep], LeafTask) for dep in deps)
             and not any(dependencies[dep] for dep in deps)  # no need to fuse if 0 or 1
             and all(len(dependents[dep]) == 1 for dep in deps)
             and all(layer.annotations == graph.layers[dep].annotations for dep in deps)
