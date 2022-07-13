@@ -794,7 +794,7 @@ def test_set_index_no_resursion_error(c):
         pytest.fail("dd.set_index triggered a recursion error")
 
 
-@pytest.mark.xfail(reason="https://github.com/dask/dask/issues/8991", strict=True)
+# @pytest.mark.xfail(reason="https://github.com/dask/dask/issues/8991", strict=True)
 @gen_cluster(client=True)
 async def test_gh_8991(c, s, a, b):
     # Test illustrating something amiss with HighLevelGraph.key_dependencies.
@@ -805,7 +805,9 @@ async def test_gh_8991(c, s, a, b):
     # resolved whether, it's fixing the underlying problem or removing
     # HighLevelGraph.key_dependencies alltogether.
     datasets = pytest.importorskip("dask.datasets")
-    result = datasets.timeseries().shuffle("x").to_orc("tmp", compute=False)
+    result = (
+        datasets.timeseries(end="2000-01-03").shuffle("x").to_orc("tmp", compute=False)
+    )
 
     # Create a dsk and mock sending it to the scheduler.
     dsk_opt = result.__dask_optimize__(result.dask, result.key)

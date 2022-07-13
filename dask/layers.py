@@ -1562,10 +1562,12 @@ class DataFrameTreeReduction(Layer):
 
 class LeafObject(Layer):
     """LeafObject Layer
+
     This class is used by ``dask.delayed`` to represent
     an explicit Python object as a un-materialized Layer.
     The primary purpose of this class is to avoid using
     `MaterializedLayer` for trivial graphs.
+
     Parameters
     ----------
     name : str
@@ -1615,16 +1617,22 @@ class LeafObject(Layer):
         # Materialized graph may only contain one element
         return 1
 
-    def cull(self, keys, all_keys):
-        # Culling should do nothing, or return
-        # a new LeafObject wrapping `None`.
-        # There are no dependencies to return
-        if self.name not in keys:
-            return LeafObject("empty-" + self.name, None), {}
-        return self, {}
-
 
 class LeafTask(Layer):
+    """LeafTask Layer
+
+    This class is used by ``dask.delayed`` to represent
+    a simple 'leaf' task as a un-materialized Layer.
+    The primary purpose of this class is to avoid using
+    `MaterializedLayer` for trivial graphs.
+
+    Parameters
+    ----------
+    name : str
+        Name to use for the constructed layer.
+    object : Any
+        Object to return.
+    """
 
     name: str
     task: tuple
@@ -1640,7 +1648,7 @@ class LeafTask(Layer):
         self.task = task
 
     def __repr__(self):
-        return f"LeafTask<type='{type(self.task)}'>"
+        return f"LeafTask<name='{self.name}'>"
 
     def get_output_keys(self):
         # Materialized graph may only contain one element
@@ -1666,6 +1674,3 @@ class LeafTask(Layer):
     def __len__(self):
         # Materialized graph may only contain one element
         return 1
-
-    def cull(self, keys, all_keys):
-        return self, {}
