@@ -21,7 +21,7 @@ def optimize(dsk, keys, **kwargs):
         # Perform Blockwise optimizations for HLG input
         dsk = optimize_dataframe_getitem(dsk, keys=keys)
         dsk = optimize_blockwise(dsk, keys=keys)
-        dsk = fuse_roots(dsk, keys=keys)
+    #    dsk = fuse_roots(dsk, keys=keys)  # TODO: Use dask#9273
     # if not config.get("optimization.cull.auto", False):
     #    # No auto culling - Apply Layer Culling
     #    dsk = dsk.cull(set(keys))

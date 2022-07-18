@@ -568,17 +568,17 @@ class MaterializedLayer(Layer):
 
         return cull(self.mapping, list(keys))[0]
 
-    # def __contains__(self, k):
-    #     return k in self.mapping
+    def __contains__(self, k):
+        return k in self.mapping
 
-    # def __getitem__(self, k):
-    #     return self.mapping[k]
+    def __getitem__(self, k):
+        return self.mapping[k]
 
-    # def __iter__(self):
-    #     return iter(self.mapping)
+    def __iter__(self):
+        return iter(self.mapping)
 
-    # def __len__(self):
-    #     return len(self.mapping)
+    def __len__(self):
+        return len(self.mapping)
 
     def is_materialized(self):
         return True
