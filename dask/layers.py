@@ -382,6 +382,7 @@ class SimpleShuffleLayer(Layer):
         ignore_index,
         name_input,
         meta_input,
+        pre_split=False,
         parts_out=None,
         annotations=None,
     ):
@@ -393,6 +394,7 @@ class SimpleShuffleLayer(Layer):
         self.ignore_index = ignore_index
         self.name_input = name_input
         self.meta_input = meta_input
+        self.pre_split = pre_split
         self.parts_out = parts_out or range(npartitions)
         self.split_name = "split-" + self.name
 
@@ -490,6 +492,7 @@ class SimpleShuffleLayer(Layer):
             self.ignore_index,
             self.name_input,
             self.meta_input,
+            pre_split=self.pre_split,
             parts_out=parts_out,
         )
 
@@ -519,6 +522,7 @@ class SimpleShuffleLayer(Layer):
             "name_input",
             "meta_input",
             "parts_out",
+            "pre_split",
             "annotations",
         ]
         return (SimpleShuffleLayer, tuple(getattr(self, attr) for attr in attrs))
@@ -536,6 +540,7 @@ class SimpleShuffleLayer(Layer):
             "ignore_index": self.ignore_index,
             "name_input": self.name_input,
             "meta_input": to_serialize(self.meta_input),
+            "pre_split": self.pre_split,
             "parts_out": list(self.parts_out),
         }
 
@@ -567,7 +572,10 @@ class SimpleShuffleLayer(Layer):
     def _construct_graph(self, deserializing=False):
         """Construct graph for a simple shuffle operation."""
 
-        shuffle_group_name = "group-" + self.name
+        if self.pre_split:
+            shuffle_group_name = self.name_input
+        else:
+            shuffle_group_name = "group-" + self.name
 
         if deserializing:
             # Use CallableLazyImport objects to avoid importing dataframe
@@ -598,7 +606,7 @@ class SimpleShuffleLayer(Layer):
                     (shuffle_group_name, _part_in),
                     _part_out,
                 )
-                if (shuffle_group_name, _part_in) not in dsk:
+                if not self.pre_split and (shuffle_group_name, _part_in) not in dsk:
                     dsk[(shuffle_group_name, _part_in)] = (
                         shuffle_group_func,
                         (self.name_input, _part_in),

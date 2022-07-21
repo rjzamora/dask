@@ -700,18 +700,50 @@ def rearrange_by_column_tasks(
         token = tokenize(df, column, npartitions)
         shuffle_name = f"simple-shuffle-{token}"
         npartitions = npartitions or df.npartitions
-        shuffle_layer = SimpleShuffleLayer(
-            shuffle_name,
-            column,
-            npartitions,
-            df.npartitions,
-            ignore_index,
-            df._name,
-            df._meta,
-        )
-        graph = HighLevelGraph.from_collections(
-            shuffle_name, shuffle_layer, dependencies=[df]
-        )
+
+        if True:
+
+            # Create intermediate (split) collection
+            shuffle_group_name = "group-" + shuffle_name
+            df_split = df.to_bag(format="frame").map_partitions(
+                shuffle_group,
+                cols=column,
+                stage=0,
+                k=npartitions,
+                npartitions=npartitions,
+                ignore_index=ignore_index,
+                nfinal=npartitions,
+                token=shuffle_group_name,
+            )
+
+            shuffle_layer = SimpleShuffleLayer(
+                shuffle_name,
+                column,
+                npartitions,
+                df.npartitions,
+                ignore_index,
+                df_split.name,
+                df._meta,
+                pre_split=True,
+            )
+            graph = HighLevelGraph.from_collections(
+                shuffle_name, shuffle_layer, dependencies=[df_split]
+            )
+
+        else:
+            shuffle_layer = SimpleShuffleLayer(
+                shuffle_name,
+                column,
+                npartitions,
+                df.npartitions,
+                ignore_index,
+                df._name,
+                df._meta,
+            )
+            graph = HighLevelGraph.from_collections(
+                shuffle_name, shuffle_layer, dependencies=[df]
+            )
+
         return new_dd_object(graph, shuffle_name, df._meta, [None] * (npartitions + 1))
 
     n = df.npartitions
