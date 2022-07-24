@@ -6307,6 +6307,114 @@ def apply_concat_apply(
         split_out_setup_kwargs,
     )
 
+    # Handle sort behavior
+    if sort is not None:
+        if sort and split_out > 1:
+            raise NotImplementedError(
+                "Cannot guarantee sorted keys for `split_out>1`."
+                " Try using split_out=1, or grouping with sort=False."
+            )
+        aggregate_kwargs = aggregate_kwargs or {}
+        aggregate_kwargs["sort"] = sort
+
+    if split_out and split_out > 1:
+        import math
+
+        import tlz as toolz
+
+        # Blockwise Chunk Layer
+        chunk_name = f"{token or funcname(chunk)}-chunk-{token_key}"
+        chunked = map_partitions(
+            chunk,
+            *args,
+            token=chunk_name,
+            **chunk_kwargs,
+        )
+
+        tree_node_func = (
+            partial(combine, **combine_kwargs) if combine_kwargs else combine
+        )
+        concat_func = partial(_concat, ignore_index=ignore_index)
+        finalize_func = (
+            partial(aggregate, **aggregate_kwargs) if aggregate_kwargs else aggregate
+        )
+
+        # Calculate tree widths and height
+        # (Used to get output keys without materializing)
+        parts = chunked.npartitions
+        widths = [parts]
+        splits = []
+        while parts > split_out:
+            splits.append(min(parts // split_out, split_every))
+            parts = math.ceil(parts / splits[-1])
+            widths.append(int(parts))
+            if splits[-1] < split_every:
+                break
+        height = len(widths)
+
+        dsk = {}
+        final_name = f"{token or funcname(aggregate)}-agg-{token_key}"
+        tree_node_name = "tree_node-" + final_name
+        if height > 1:
+            for depth in range(1, height):
+                for group in range(widths[depth]):
+                    # Calculate inputs for the current group
+                    p_max = widths[depth - 1]
+                    lstart = splits[depth - 1] * group
+                    lstop = min(lstart + splits[depth - 1], p_max)
+                    if depth == 1:
+                        # Input nodes are from input layer
+                        input_keys = [(chunked._name, p) for p in range(lstart, lstop)]
+                    else:
+                        # Input nodes are tree-reduction nodes
+                        input_keys = [
+                            (tree_node_name, p, depth - 1) for p in range(lstart, lstop)
+                        ]
+                    # Define task
+                    if depth == height - 1:
+                        # Final Nodes
+                        dsk[(final_name, group)] = (
+                            toolz.pipe,
+                            input_keys,
+                            concat_func,
+                            tree_node_func,
+                        )  # finalize_func)
+                    else:
+                        # Intermediate Nodes
+                        dsk[(tree_node_name, group, depth)] = (
+                            toolz.pipe,
+                            input_keys,
+                            concat_func,
+                            tree_node_func,
+                        )
+        else:
+            # Deal with single-partition case
+            for p in range(chunked.npartitions):
+                dsk[(final_name, p)] = (tree_node_func, (chunked._name, p))
+
+        graph = HighLevelGraph.from_collections(final_name, dsk, dependencies=[chunked])
+
+        if meta is no_default:
+            meta_chunk = _emulate(chunk, *args, udf=True, **chunk_kwargs)
+            meta = _emulate(
+                aggregate,
+                _concat([meta_chunk], ignore_index),
+                udf=True,
+                **aggregate_kwargs,
+            )
+        meta = make_meta(
+            meta,
+            index=(getattr(make_meta(dfs[0]), "index", None) if dfs else None),
+            parent_meta=dfs[0]._meta,
+        )
+
+        result = new_dd_object(
+            graph, final_name, chunked._meta, [None] * (widths[-1] + 1)
+        )
+        return result.shuffle(result.index, npartitions=split_out).map_partitions(
+            finalize_func, meta=meta
+        )
+
     # Blockwise Chunk Layer
     chunk_name = f"{token or funcname(chunk)}-chunk-{token_key}"
     chunked = map_bag_partitions(
@@ -6335,16 +6443,6 @@ def apply_concat_apply(
             ignore_index,
             token="split-%s" % token_key,
         )
-
-    # Handle sort behavior
-    if sort is not None:
-        if sort and split_out > 1:
-            raise NotImplementedError(
-                "Cannot guarantee sorted keys for `split_out>1`."
-                " Try using split_out=1, or grouping with sort=False."
-            )
-        aggregate_kwargs = aggregate_kwargs or {}
-        aggregate_kwargs["sort"] = sort
 
     # Tree-Reduction Layer
     final_name = f"{token or funcname(aggregate)}-agg-{token_key}"
