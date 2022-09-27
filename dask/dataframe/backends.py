@@ -55,7 +55,14 @@ class DataFrameBackendEntrypoint(DaskBackendEntrypoint):
         raise NotImplementedError
 
     @staticmethod
-    def from_dict(*args, **kwargs):
+    def from_dict(
+        data: dict,
+        *,
+        npartitions: int,
+        orient: str = "columns",
+        dtype: bool | None = None,
+        columns: str | None = None,
+    ):
         """Create a DataFrame collection from a dictionary"""
         raise NotImplementedError
 
