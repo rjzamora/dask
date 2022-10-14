@@ -447,13 +447,13 @@ def default_rng(seed=None):
         # Pass through a Generator
         seed._generator = type(seed)
         return seed
-    elif hasattr(seed, "standard_normal"):
+    elif hasattr(seed, "bit_generator"):
         # a Generator. Just not ours
-        res = Generator(array_creation_dispatch.DefaultBitGenerator())
+        res = Generator(seed.bit_generator)
         res._generator = type(seed)
         return res
-    # Otherwise return default Generator
-    return Generator(array_creation_dispatch.DefaultBitGenerator(seed))
+    # Otherwise, use the backend-default Generator
+    return default_rng(array_creation_dispatch.default_rng(seed))
 
 
 class RandomState:
@@ -989,8 +989,9 @@ Lazy RNG-state machinery
 _cached_states = {}
 
 
-def _make_default_state_api(attr, state_constructor=None):
+def _make_api(attr, state_constructor=None, state_class=None):
     state_constructor = state_constructor or RandomState
+    state_class = state_class or RandomState
 
     def wrapper(*args, **kwargs):
         backend = array_creation_dispatch.backend
@@ -1003,8 +1004,8 @@ def _make_default_state_api(attr, state_constructor=None):
             attr,
         )(*args, **kwargs)
 
-    # wrapper.__name__ = getattr(state_constructor, attr).__name__
-    # wrapper.__doc__ = getattr(state_constructor, attr).__doc__
+    wrapper.__name__ = getattr(state_class, attr).__name__
+    wrapper.__doc__ = getattr(state_class, attr).__doc__
     return wrapper
 
 
@@ -1012,67 +1013,67 @@ def _make_default_state_api(attr, state_constructor=None):
 Generator only
 """
 
-integers = _make_default_state_api("integers", default_rng)
-multivariate_hypergeometric = _make_default_state_api(
-    "multivariate_hypergeometric", default_rng
+integers = _make_api("integers", default_rng, Generator)
+multivariate_hypergeometric = _make_api(
+    "multivariate_hypergeometric", default_rng, Generator
 )
-random = _make_default_state_api("random", default_rng)
+random = _make_api("random", default_rng, Generator)
 
 
 """
 RandomState only
 """
 
-seed = _make_default_state_api("seed")
+seed = _make_api("seed")
 
-random_sample = _make_default_state_api("random_sample")
-random = _make_default_state_api("random_sample")
-randint = _make_default_state_api("randint")
-random_integers = _make_default_state_api("random_integers")
+random_sample = _make_api("random_sample")
+random = _make_api("random_sample")
+randint = _make_api("randint")
+random_integers = _make_api("random_integers")
 
 
 """
 Common distributions
 """
 
-beta = _make_default_state_api("beta")
-binomial = _make_default_state_api("binomial")
-chisquare = _make_default_state_api("chisquare")
-choice = _make_default_state_api("choice")
-exponential = _make_default_state_api("exponential")
-f = _make_default_state_api("f")
-gamma = _make_default_state_api("gamma")
-geometric = _make_default_state_api("geometric")
-gumbel = _make_default_state_api("gumbel")
-hypergeometric = _make_default_state_api("hypergeometric")
-laplace = _make_default_state_api("laplace")
-logistic = _make_default_state_api("logistic")
-lognormal = _make_default_state_api("lognormal")
-logseries = _make_default_state_api("logseries")
-multinomial = _make_default_state_api("multinomial")
-negative_binomial = _make_default_state_api("negative_binomial")
-noncentral_chisquare = _make_default_state_api("noncentral_chisquare")
-noncentral_f = _make_default_state_api("noncentral_f")
-normal = _make_default_state_api("normal")
-pareto = _make_default_state_api("pareto")
-permutation = _make_default_state_api("permutation")
-poisson = _make_default_state_api("poisson")
-power = _make_default_state_api("power")
-rayleigh = _make_default_state_api("rayleigh")
-triangular = _make_default_state_api("triangular")
-uniform = _make_default_state_api("uniform")
-vonmises = _make_default_state_api("vonmises")
-wald = _make_default_state_api("wald")
-weibull = _make_default_state_api("weibull")
-zipf = _make_default_state_api("zipf")
+beta = _make_api("beta")
+binomial = _make_api("binomial")
+chisquare = _make_api("chisquare")
+choice = _make_api("choice")
+exponential = _make_api("exponential")
+f = _make_api("f")
+gamma = _make_api("gamma")
+geometric = _make_api("geometric")
+gumbel = _make_api("gumbel")
+hypergeometric = _make_api("hypergeometric")
+laplace = _make_api("laplace")
+logistic = _make_api("logistic")
+lognormal = _make_api("lognormal")
+logseries = _make_api("logseries")
+multinomial = _make_api("multinomial")
+negative_binomial = _make_api("negative_binomial")
+noncentral_chisquare = _make_api("noncentral_chisquare")
+noncentral_f = _make_api("noncentral_f")
+normal = _make_api("normal")
+pareto = _make_api("pareto")
+permutation = _make_api("permutation")
+poisson = _make_api("poisson")
+power = _make_api("power")
+rayleigh = _make_api("rayleigh")
+triangular = _make_api("triangular")
+uniform = _make_api("uniform")
+vonmises = _make_api("vonmises")
+wald = _make_api("wald")
+weibull = _make_api("weibull")
+zipf = _make_api("zipf")
 
 
 """
 Standard distributions
 """
 
-standard_cauchy = _make_default_state_api("standard_cauchy")
-standard_exponential = _make_default_state_api("standard_exponential")
-standard_gamma = _make_default_state_api("standard_gamma")
-standard_normal = _make_default_state_api("standard_normal")
-standard_t = _make_default_state_api("standard_t")
+standard_cauchy = _make_api("standard_cauchy")
+standard_exponential = _make_api("standard_exponential")
+standard_gamma = _make_api("standard_gamma")
+standard_normal = _make_api("standard_normal")
+standard_t = _make_api("standard_t")
