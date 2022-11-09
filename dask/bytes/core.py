@@ -83,6 +83,96 @@ def read_bytes(
     if len(paths) == 0:
         raise OSError("%s resolved to no files" % urlpath)
 
+    offsets, lengths = byte_ranges(
+        paths,
+        fs,
+        not_zero=not_zero,
+        blocksize=blocksize,
+        compression=compression,
+    )
+
+    delayed_read = delayed(read_block_from_file)
+
+    out = []
+    for path, offset, length in zip(paths, offsets, lengths):
+        token = tokenize(fs_token, delimiter, path, fs.ukey(path), compression, offset)
+        keys = [f"read-block-{o}-{token}" for o in offset]
+        values = [
+            delayed_read(
+                OpenFile(fs, path, compression=compression),
+                o,
+                l,
+                delimiter,
+                dask_key_name=key,
+            )
+            for o, key, l in zip(offset, keys, length)
+        ]
+        out.append(values)
+
+    if sample:
+        if sample is True:
+            sample = "10 kiB"  # backwards compatibility
+        if isinstance(sample, str):
+            sample = parse_bytes(sample)
+        with OpenFile(fs, paths[0], compression=compression) as f:
+            # read block without seek (because we start at zero)
+            if delimiter is None:
+                sample = f.read(sample)
+            else:
+                sample_buff = f.read(sample)
+                while True:
+                    new = f.read(sample)
+                    if not new:
+                        break
+                    if delimiter in new:
+                        sample_buff = (
+                            sample_buff + new.split(delimiter, 1)[0] + delimiter
+                        )
+                        break
+                    sample_buff = sample_buff + new
+                sample = sample_buff
+    if include_path:
+        return sample, out, paths
+    return sample, out
+
+
+def read_block_from_file(lazy_file, off, bs, delimiter):
+    with copy.copy(lazy_file) as f:
+        if off == 0 and bs is None:
+            return f.read()
+        return read_block(f, off, bs, delimiter)
+
+
+def byte_ranges(
+    paths,
+    fs,
+    not_zero=False,
+    blocksize="128 MiB",
+    compression=None,
+):
+    """Decompose paths into byte ranges (offsets and lengths)
+
+    Parameters
+    ----------
+    paths : list of strings
+    fs : fsspec AbstractFileSystem object
+    not_zero : bool
+        Force seek of start-of-file delimiter, discarding header.
+    blocksize : int, str
+        Chunk size in bytes, defaults to "128 MiB"
+    compression : string or None
+        String like 'gzip' or 'xz'.  Must support efficient random access.
+
+    Returns
+    -------
+    offsets : List[List[int]]
+        List of byte-range offsets for each path. Outer list must be
+        the same length as ``paths``.
+    lengths : List[List[int]]
+        List of byte-range lengths for each path. Outer list must be
+        the same length as ``paths``.
+    """
+
     if blocksize is not None:
         if isinstance(blocksize, str):
             blocksize = parse_bytes(blocksize)
@@ -140,53 +230,4 @@ def read_bytes(
                 offsets.append(off)
                 lengths.append(length)
 
-    delayed_read = delayed(read_block_from_file)
-
-    out = []
-    for path, offset, length in zip(paths, offsets, lengths):
-        token = tokenize(fs_token, delimiter, path, fs.ukey(path), compression, offset)
-        keys = [f"read-block-{o}-{token}" for o in offset]
-        values = [
-            delayed_read(
-                OpenFile(fs, path, compression=compression),
-                o,
-                l,
-                delimiter,
-                dask_key_name=key,
-            )
-            for o, key, l in zip(offset, keys, length)
-        ]
-        out.append(values)
-
-    if sample:
-        if sample is True:
-            sample = "10 kiB"  # backwards compatibility
-        if isinstance(sample, str):
-            sample = parse_bytes(sample)
-        with OpenFile(fs, paths[0], compression=compression) as f:
-            # read block without seek (because we start at zero)
-            if delimiter is None:
-                sample = f.read(sample)
-            else:
-                sample_buff = f.read(sample)
-                while True:
-                    new = f.read(sample)
-                    if not new:
-                        break
-                    if delimiter in new:
-                        sample_buff = (
-                            sample_buff + new.split(delimiter, 1)[0] + delimiter
-                        )
-                        break
-                    sample_buff = sample_buff + new
-                sample = sample_buff
-    if include_path:
-        return sample, out, paths
-    return sample, out
-
-
-def read_block_from_file(lazy_file, off, bs, delimiter):
-    with copy.copy(lazy_file) as f:
-        if off == 0 and bs is None:
-            return f.read()
-        return read_block(f, off, bs, delimiter)
+    return offsets, lengths
