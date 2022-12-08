@@ -20,6 +20,11 @@ except ImportError:
     pass
 
 try:
+    from dask.dataframe.io.experimental import read_parquet as read_parquet_exp
+except ImportError:
+    pass
+
+try:
     from dask.dataframe.io.orc import read_orc, to_orc
 except ImportError:
     pass
