@@ -1,30 +1,25 @@
-from fsspec.core import get_fs_token_paths
+import itertools
 from contextlib import ExitStack
 
-import itertools
-from dask.delayed import delayed
+import cudf
+import pandas as pd
+import pyarrow as pa
+import pyarrow.dataset as pa_ds
+import pyarrow.parquet as pq
+from cudf.io.parquet import _default_open_file_options
+from cudf.utils.ioutils import _open_remote_files
+from fsspec.core import get_fs_token_paths
 
 import dask
 import dask.dataframe as dd
 from dask.dataframe.io.utils import DataFrameIOFunction, _is_local_fs
+from dask.delayed import delayed
 from dask.utils import natural_sort_key, parse_bytes
 
-import pyarrow as pa
-import pyarrow.dataset as pa_ds
-import pyarrow.parquet as pq
-
-import pandas as pd
-import cudf
-
-from cudf.utils.ioutils import _open_remote_files
-from cudf.io.parquet import _default_open_file_options
-
-_BLOCKSIZE_DEFAULT = 64_000_000
-
+_BLOCKSIZE_DEFAULT = 64_000_000  # TODO: Make this engine-configurable
 
 
 class ReadParquet(DataFrameIOFunction):
-
     def __init__(self, engine, meta, map_options):
         self.engine = engine
         self.meta = meta
@@ -48,7 +43,6 @@ class ReadParquet(DataFrameIOFunction):
 
 
 class Engine:
-
     @classmethod
     def gather_metadata(
         cls,
@@ -65,12 +59,11 @@ class Engine:
         dataset_options=None,
         read_options=None,
     ):
-        raise NotImplemetedError
-    
-    
+        raise NotImplementedError
+
     @classmethod
     def make_partitioning_plan(cls, fragments, partitioning_options):
-        
+
         chunksize = partitioning_options["chunksize"]
         blocksize = partitioning_options["blocksize"]
         granularity = partitioning_options["granularity"]
@@ -104,22 +97,22 @@ class Engine:
         else:
             size_metric = None
             size_field = None
-        parts = _partitioning_plan(fragments, size_metric, size_field, granularity).to_records(index=False)
+        parts = _partitioning_plan(
+            fragments, size_metric, size_field, granularity
+        ).to_records(index=False)
 
         return parts, (None,) * (len(parts) + 1)
-    
 
     @classmethod
     def make_partition(cls, part, **kwargs):
         raise NotImplementedError
-    
-    
-class ArrowEngine(Engine):
 
+
+class ArrowEngine(Engine):
     @classmethod
     def _make_meta(cls, dataset):
         return dataset.schema.empty_table().to_pandas()
-    
+
     @classmethod
     def gather_metadata(
         cls,
@@ -136,31 +129,32 @@ class ArrowEngine(Engine):
         dataset_options=None,
         read_options=None,
     ):
-        
+
         if chunksize:
             blocksize = None
         elif blocksize == "auto":
             blocksize = _BLOCKSIZE_DEFAULT
         elif blocksize:
             blocksize = parse_bytes(blocksize)
-        
+
         storage_options = storage_options or {}
         dataset_options = dataset_options or {}
         read_options = read_options or {}
-        fs, _, paths = get_fs_token_paths(urlpath, mode="rb", storage_options=storage_options)
+        fs, _, paths = get_fs_token_paths(
+            urlpath, mode="rb", storage_options=storage_options
+        )
         if not isinstance(urlpath, (list, tuple)):
             paths = sorted(paths, key=natural_sort_key)
         if not paths:
             raise ValueError
-        
+
         # Process filters argument
         ds_filters = None
         if isinstance(filters, pa.compute.Expression):
             ds_filters = filters
         elif filters is not None:
             ds_filters = pq._filters_to_expression(filters)
-        
-        
+
         # Create pyarrow dataset
         if "filesystem" not in dataset_options:
             dataset_options["filesystem"] = fs
@@ -174,7 +168,6 @@ class ArrowEngine(Engine):
                 dataset = pa_ds.parquet_dataset(meta_path, **dataset_options)
         if dataset is None:
             dataset = pa_ds.dataset(paths, **dataset_options)
-
 
         # Gather file metadata
         # TODO: Avoid collecting unnecessary info when
@@ -191,17 +184,33 @@ class ArrowEngine(Engine):
                 record["total_byte_size"] = row_group.total_byte_size
             return record
 
-        def _make_file_records(file_frag, chunksize, blocksize, granularity, ds_filters):
+        def _make_file_records(
+            file_frag, chunksize, blocksize, granularity, ds_filters
+        ):
 
             if granularity == "file":
                 # Avoid splitting by row-group
                 if chunksize:
-                    return[{"path": file_frag.path, "row_group": None, "num_rows": file_frag.count_rows()}]
+                    return [
+                        {
+                            "path": file_frag.path,
+                            "row_group": None,
+                            "num_rows": file_frag.count_rows(),
+                        }
+                    ]
                 elif blocksize:
-                    return[{"path": file_frag.path, "row_group": None, "total_byte_size": sum(rg.total_byte_size for rg in file_frag.row_groups)}]
+                    return [
+                        {
+                            "path": file_frag.path,
+                            "row_group": None,
+                            "total_byte_size": sum(
+                                rg.total_byte_size for rg in file_frag.row_groups
+                            ),
+                        }
+                    ]
                 else:
                     # Simple case
-                    return[{"path": file_frag.path, "row_group": None}]
+                    return [{"path": file_frag.path, "row_group": None}]
             else:
                 return [
                     _make_record(rg_frag, file_frag.path, chunksize, blocksize)
@@ -212,7 +221,9 @@ class ArrowEngine(Engine):
             fragment_info = list(
                 itertools.chain(
                     *[
-                        _make_file_records(file_frag, chunksize, blocksize, granularity, ds_filters)
+                        _make_file_records(
+                            file_frag, chunksize, blocksize, granularity, ds_filters
+                        )
                         for file_frag in dataset.get_fragments(ds_filters)
                     ]
                 )
@@ -223,14 +234,15 @@ class ArrowEngine(Engine):
                 itertools.chain(
                     *dask.compute(
                         [
-                            _make_file_records_delayed(file_frag, chunksize, blocksize, granularity, ds_filters)
+                            _make_file_records_delayed(
+                                file_frag, chunksize, blocksize, granularity, ds_filters
+                            )
                             for file_frag in dataset.get_fragments(ds_filters)
                         ]
                     )[0]
                 )
             )
         fragments = pd.DataFrame.from_records(fragment_info)
-
 
         # Define output `meta`
         # TODO: Deal with index and partitioned datasets
@@ -242,7 +254,7 @@ class ArrowEngine(Engine):
         if index:
             meta = meta.set_index(index)
         index = meta.index.names
-        
+
         partitioning_options = {
             "index": index,
             "chunksize": chunksize,
@@ -250,11 +262,11 @@ class ArrowEngine(Engine):
             "granularity": granularity,
         }
         map_options = {
-            "fs": fs, 
+            "fs": fs,
             "columns": columns,
             "index": index,
         }
-        
+
         return (
             meta,
             fragments,
@@ -263,28 +275,29 @@ class ArrowEngine(Engine):
             map_options,
         )
 
-
     @classmethod
     def make_partition(cls, part, **kwargs):
         raise NotImplementedError
 
 
 class CudfEngine(ArrowEngine):
-
     @classmethod
     def _make_meta(cls, dataset):
         return cudf.DataFrame.from_arrow(dataset.schema.empty_table())
 
-    
     @classmethod
     def make_partition(cls, part, **kwargs):
-        reads = pd.DataFrame.from_dict({"path": part[0], "rgs": part[1]}).groupby("path").agg(list)
+        reads = (
+            pd.DataFrame.from_dict({"path": part[0], "rgs": part[1]})
+            .groupby("path")
+            .agg(list)
+        )
         paths = reads.index.tolist()
         row_groups = None if (part[1] and part[1][0] is None) else reads.rgs.tolist()
         open_file_options = None
         fs = kwargs.pop("fs")
         columns = kwargs.pop("columns", None)
-        index = kwargs.pop("index", None)
+        kwargs.pop("index", None)  # TODO
 
         with ExitStack() as stack:
 
@@ -330,10 +343,12 @@ def read_parquet(
     dataset_options=None,
     **read_options,
 ):
-  
+
     ### SET ENGINE
-    
-    engine = CudfEngine if engine == "cudf" else ArrowEngine  # TODO: Proper engine dispatching
+
+    engine = (
+        CudfEngine if engine == "cudf" else ArrowEngine
+    )  # TODO: Proper engine dispatching
 
     ### PROCESS METADATA (Overriding is Required)
     (
@@ -357,11 +372,9 @@ def read_parquet(
         storage_options=storage_options,
     )
 
-    
     ### GENERATE PARTITIONING PLAN (Overriding is Optional)
     parts, divisions = engine.make_partitioning_plan(fragments, partitioning_options)
-    
-    
+
     ### CALL FROM_MAP (ENGINE AGNOSTIC)
     return dd.from_map(
         ReadParquet(engine, meta, map_options),
