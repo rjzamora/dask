@@ -1,5 +1,8 @@
+import itertools
 import json
+import math
 import textwrap
+import time
 from collections import defaultdict
 from datetime import datetime
 
@@ -9,6 +12,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from packaging.version import parse as parse_version
 
+from dask import compute
 from dask.base import tokenize
 from dask.core import flatten
 from dask.dataframe._compat import PANDAS_GT_120
@@ -25,8 +29,8 @@ from dask.dataframe.io.parquet.utils import (
 )
 from dask.dataframe.io.utils import _get_pyarrow_dtypes, _is_local_fs, _open_input_files
 from dask.dataframe.utils import clear_known_categories
-from dask.delayed import Delayed
-from dask.utils import getargspec, natural_sort_key
+from dask.delayed import Delayed, delayed
+from dask.utils import getargspec, natural_sort_key, parse_bytes
 
 # Check PyArrow version for feature support
 _pa_version = parse_version(pa.__version__)
@@ -1270,80 +1274,293 @@ class ArrowDatasetEngine(Engine):
         if filters is not None:
             ds_filters = pq._filters_to_expression(filters)
 
-        # Define subset of `dataset_info` required by _collect_file_parts
-        dataset_info_kwargs = {
-            "fs": fs,
-            "split_row_groups": split_row_groups,
-            "gather_statistics": gather_statistics,
-            "filters": filters,
-            "ds_filters": ds_filters,
-            "schema": schema,
-            "stat_col_indices": stat_col_indices,
-            "aggregation_depth": aggregation_depth,
-            "chunksize": chunksize,
-            "partitions": partitions,
-            "dataset_options": kwargs["dataset"],
-        }
+        def _flat_list(nested_list):
+            return list(itertools.chain(*nested_list))
 
-        # Main parts/stats-construction
-        if (
-            has_metadata_file
-            or metadata_task_size == 0
-            or metadata_task_size > len(ds.files)
+        def _collect_fragment_metadata(
+            file_frag, path_id, ds_filters=None, columns=None
         ):
-            # We have a global _metadata file to work with.
-            # Therefore, we can just loop over fragments on the client.
+            metadata = []
+            columns = columns or []
+            for frag in file_frag.split_by_row_group(ds_filters):
+                row_group = frag.row_groups[0]
+                num_rows = row_group.num_rows
+                byte_size = row_group.total_byte_size
+                stats = {}
+                if columns:
+                    for i in range(row_group.metadata.num_columns):
+                        col = row_group.metadata.column(i)
+                        name = col.path_in_schema
+                        if name in columns:
+                            stats[name] = col.statistics.to_dict()
+                metadata.append(
+                    {
+                        "path_id": path_id,
+                        "rg": row_group.id,
+                        "num_rows": num_rows,
+                        "byte_size": byte_size,
+                        "stats": stats,
+                    }
+                )
+            return metadata
 
-            # Start with sorted (by path) list of file-based fragments
-            file_frags = sorted(
-                (frag for frag in ds.get_fragments(ds_filters)),
+        def _collect_file_metadata(
+            path, path_id, fs, dataset_kwargs, ds_filters=None, columns=None
+        ):
+            metadata = []
+            columns = columns or []
+
+            ds = pa_ds.dataset(
+                [path],
+                filesystem=_wrapped_fs(fs),
+                **dataset_kwargs,
+            )
+            for file_frag in ds.get_fragments():
+                for frag in file_frag.split_by_row_group(ds_filters):
+                    row_group = frag.row_groups[0]
+                    num_rows = row_group.num_rows
+                    byte_size = row_group.total_byte_size
+                    stats = {}
+                    if columns:
+                        for i in range(row_group.metadata.num_columns):
+                            col = row_group.metadata.column(i)
+                            name = col.path_in_schema
+                            if name in columns:
+                                stats[name] = col.statistics.to_dict()
+                    metadata.append(
+                        {
+                            "path_id": path_id,
+                            "rg": row_group.id,
+                            "num_rows": num_rows,
+                            "byte_size": byte_size,
+                            "stats": stats,
+                        }
+                    )
+            return metadata
+
+        def _collect_file_group_metadata(
+            files,
+            file_offset,
+            *args,
+            collect_func=_collect_file_metadata,
+            **kwargs,
+        ):
+            return _flat_list(
+                [
+                    collect_func(
+                        file,
+                        file_offset + i,
+                        *args,
+                        **kwargs,
+                    )
+                    for i, file in enumerate(files)
+                ]
+            )
+
+        t0 = time.time()
+        gather_metadata = bool(chunksize)
+        metadata_task_size = 1
+        compute_kwargs = dict(scheduler=None)
+
+        if gather_metadata:
+
+            by = "byte_size"  # "How" we are aggregating ("byte_size" or "num_rows")
+            size_limit = parse_bytes(chunksize)  # Use chunksize or blocksize
+            aggregate_files = True
+
+            ds_filters = None
+            partition_keys = {}
+            if ds_filters is not None or partitions:
+                paths = []
+                fragments = []
+                for file_frag in ds.get_fragments(ds_filters):
+                    # Extract hive-partition keys, and make sure they
+                    # are orederd the same as they are in `partitions`
+                    raw_keys = pa_ds._get_partition_keys(file_frag.partition_expression)
+                    paths.append(file_frag.path)
+                    partition_keys[paths[-1]] = [
+                        (hive_part.name, raw_keys[hive_part.name])
+                        for hive_part in partitions
+                    ]
+                    fragments.append(file_frag)
+            else:
+                paths = ds.files
+                fragments = list(ds.get_fragments())
+            paths = sorted(paths, key=natural_sort_key)
+            fragments = sorted(
+                fragments,
                 key=lambda x: natural_sort_key(x.path),
             )
-            parts, stats = cls._collect_file_parts(file_frags, dataset_info_kwargs)
-        else:
-            # We DON'T have a global _metadata file to work with.
-            # We should loop over files in parallel
 
-            # Collect list of file paths.
-            # If valid_paths is not None, the user passed in a list
-            # of files containing a _metadata file.  Since we used
-            # the _metadata file to generate our dataset object , we need
-            # to ignore any file fragments that are not in the list.
-            all_files = sorted(ds.files, key=natural_sort_key)
-            if valid_paths:
-                all_files = [
-                    filef
-                    for filef in all_files
-                    if filef.split(fs.sep)[-1] in valid_paths
-                ]
+            if metadata_task_size >= len(paths):
+                metadata_summary = _flat_list(
+                    [
+                        _collect_fragment_metadata(
+                            fragment,
+                            i,
+                            # fs,
+                            # kwargs["dataset"],
+                            ds_filters=ds_filters,
+                            columns=None,  # TODO: Gather necessary statistics
+                        )
+                        for i, fragment in enumerate(fragments)
+                    ]
+                )
+            else:
+                # Compute and return flattened result
+                func = delayed(_collect_file_group_metadata)
+                metadata_summary = _flat_list(
+                    compute(
+                        [
+                            func(
+                                fragments[i : i + metadata_task_size],
+                                i,
+                                # fs,
+                                # kwargs["dataset"],
+                                ds_filters=ds_filters,
+                                columns=None,  # TODO: Gather necessary statistics
+                                collect_func=_collect_fragment_metadata,
+                            )
+                            for i in range(0, len(fragments), metadata_task_size)
+                        ],
+                        **compute_kwargs,
+                    )[0]
+                )
 
-            parts, stats = [], []
-            if all_files:
-                # Build and compute a task graph to construct stats/parts
-                gather_parts_dsk = {}
-                name = "gather-pq-parts-" + tokenize(all_files, dataset_info_kwargs)
-                finalize_list = []
-                for task_i, file_i in enumerate(
-                    range(0, len(all_files), metadata_task_size)
+            tT = time.time() - t0
+
+            metadata_agg = (
+                pd.DataFrame(metadata_summary)
+                .groupby("path_id")
+                .agg({"rg": [list], by: [sum, list]})
+            )
+
+            parts = []
+            new_part, total_size = [], 0
+            for i, path in enumerate(paths):
+                partition_info = partition_keys[path] if partition_keys else None
+
+                # Get total size of the next file
+                next_size = metadata_agg.loc[i][by]["sum"]
+
+                # If this next file will put us over the size limit,
+                # and we already have data to read, then start fresh
+                if total_size > 0 and (
+                    not aggregate_files or (next_size + total_size > size_limit)
                 ):
-                    finalize_list.append((name, task_i))
-                    gather_parts_dsk[finalize_list[-1]] = (
-                        cls._collect_file_parts,
-                        all_files[file_i : file_i + metadata_task_size],
-                        dataset_info_kwargs,
+                    parts.append(new_part)
+                    new_part, total_size = [], 0
+
+                # If the next file alone is too large, we should try
+                # splitting it into multiple parts
+                if next_size > size_limit:
+                    assert total_size == 0
+                    assert new_part == []
+                    rgs = metadata_agg.loc[i]["rg"]["list"]
+                    rg_sizes = metadata_agg.loc[i][by]["list"]
+                    target_size = next_size // math.ceil(next_size / size_limit)
+                    new_rgs, total_size = [], 0
+                    for rg, rg_size in zip(rgs, rg_sizes):
+                        if total_size and (total_size + rg_size > target_size):
+                            parts.append({"piece": [(path, new_rgs, partition_info)]})
+                            new_rgs, total_size = [], 0
+                        new_rgs.append(rg)
+                        total_size += rg_size
+                    parts.append({"piece": [(path, new_rgs, partition_info)]})
+                    total_size = 0
+
+                else:
+                    # Default behavior: Add file to part
+                    new_part.append((path, None, partition_info))
+                    total_size += next_size
+
+            if total_size > 0:
+                parts.append({"piece": new_part})
+            stats = {}  # TODO: Collect necessary stats
+
+        else:
+
+            # Define subset of `dataset_info` required by _collect_file_parts
+            dataset_info_kwargs = {
+                "fs": fs,
+                "split_row_groups": split_row_groups,
+                "gather_statistics": gather_statistics,
+                "filters": filters,
+                "ds_filters": ds_filters,
+                "schema": schema,
+                "stat_col_indices": stat_col_indices,
+                "aggregation_depth": aggregation_depth,
+                "chunksize": chunksize,
+                "partitions": partitions,
+                "dataset_options": kwargs["dataset"],
+            }
+
+            # Main parts/stats-construction
+            if (
+                has_metadata_file
+                or metadata_task_size == 0
+                or metadata_task_size > len(ds.files)
+            ):
+                # We have a global _metadata file to work with.
+                # Therefore, we can just loop over fragments on the client.
+
+                # Start with sorted (by path) list of file-based fragments
+                file_frags = sorted(
+                    (frag for frag in ds.get_fragments(ds_filters)),
+                    key=lambda x: natural_sort_key(x.path),
+                )
+                parts, stats = cls._collect_file_parts(file_frags, dataset_info_kwargs)
+            else:
+                # We DON'T have a global _metadata file to work with.
+                # We should loop over files in parallel
+
+                # Collect list of file paths.
+                # If valid_paths is not None, the user passed in a list
+                # of files containing a _metadata file.  Since we used
+                # the _metadata file to generate our dataset object , we need
+                # to ignore any file fragments that are not in the list.
+                all_files = sorted(ds.files, key=natural_sort_key)
+                if valid_paths:
+                    all_files = [
+                        filef
+                        for filef in all_files
+                        if filef.split(fs.sep)[-1] in valid_paths
+                    ]
+
+                parts, stats = [], []
+                if all_files:
+                    # Build and compute a task graph to construct stats/parts
+                    gather_parts_dsk = {}
+                    name = "gather-pq-parts-" + tokenize(all_files, dataset_info_kwargs)
+                    finalize_list = []
+                    for task_i, file_i in enumerate(
+                        range(0, len(all_files), metadata_task_size)
+                    ):
+                        finalize_list.append((name, task_i))
+                        gather_parts_dsk[finalize_list[-1]] = (
+                            cls._collect_file_parts,
+                            all_files[file_i : file_i + metadata_task_size],
+                            dataset_info_kwargs,
+                        )
+
+                    def _combine_parts(parts_and_stats):
+                        parts, stats = [], []
+                        for part, stat in parts_and_stats:
+                            parts += part
+                            if stat:
+                                stats += stat
+                        return parts, stats
+
+                    gather_parts_dsk["final-" + name] = (_combine_parts, finalize_list)
+                    # parts, stats = Delayed("final-" + name, gather_parts_dsk).compute(scheduler="threads")
+                    parts, stats = Delayed("final-" + name, gather_parts_dsk).compute(
+                        **compute_kwargs
                     )
 
-                def _combine_parts(parts_and_stats):
-                    parts, stats = [], []
-                    for part, stat in parts_and_stats:
-                        parts += part
-                        if stat:
-                            stats += stat
-                    return parts, stats
+        tT2 = time.time() - t0
+        import pdb
 
-                gather_parts_dsk["final-" + name] = (_combine_parts, finalize_list)
-                parts, stats = Delayed("final-" + name, gather_parts_dsk).compute()
-
+        pdb.set_trace()
         return parts, stats, common_kwargs
 
     @classmethod
