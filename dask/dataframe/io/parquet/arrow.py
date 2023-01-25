@@ -1278,11 +1278,11 @@ class ArrowDatasetEngine(Engine):
             return list(itertools.chain(*nested_list))
 
         def _collect_fragment_metadata(
-            file_frag, path_id, ds_filters=None, columns=None
+            file_frag, path_id, ds_filters=None, columns=None, schema=None
         ):
             metadata = []
             columns = columns or []
-            for frag in file_frag.split_by_row_group(ds_filters):
+            for frag in file_frag.split_by_row_group(ds_filters, schema=schema):
                 row_group = frag.row_groups[0]
                 num_rows = row_group.num_rows
                 byte_size = row_group.total_byte_size
@@ -1305,7 +1305,13 @@ class ArrowDatasetEngine(Engine):
             return metadata
 
         def _collect_file_metadata(
-            path, path_id, fs, dataset_kwargs, ds_filters=None, columns=None
+            path,
+            path_id,
+            fs,
+            dataset_kwargs,
+            ds_filters=None,
+            columns=None,
+            schema=None,
         ):
             metadata = []
             columns = columns or []
@@ -1316,7 +1322,7 @@ class ArrowDatasetEngine(Engine):
                 **dataset_kwargs,
             )
             for file_frag in ds.get_fragments():
-                for frag in file_frag.split_by_row_group(ds_filters):
+                for frag in file_frag.split_by_row_group(ds_filters, schema=schema):
                     row_group = frag.row_groups[0]
                     num_rows = row_group.num_rows
                     byte_size = row_group.total_byte_size
@@ -1357,18 +1363,17 @@ class ArrowDatasetEngine(Engine):
                 ]
             )
 
-        t0 = time.time()
-        gather_metadata = bool(chunksize)
-        metadata_task_size = 1
-        compute_kwargs = dict(scheduler=None)
+        local_gather = False
+        gather_metadata = False  # bool(chunksize)
+        compute_kwargs = dict(scheduler="threads" if local_gather else None)
 
+        t0 = time.time()
         if gather_metadata:
 
             by = "byte_size"  # "How" we are aggregating ("byte_size" or "num_rows")
             size_limit = parse_bytes(chunksize)  # Use chunksize or blocksize
             aggregate_files = True
 
-            ds_filters = None
             partition_keys = {}
             if ds_filters is not None or partitions:
                 paths = []
@@ -1402,6 +1407,7 @@ class ArrowDatasetEngine(Engine):
                             # kwargs["dataset"],
                             ds_filters=ds_filters,
                             columns=None,  # TODO: Gather necessary statistics
+                            schema=schema,
                         )
                         for i, fragment in enumerate(fragments)
                     ]
@@ -1419,6 +1425,7 @@ class ArrowDatasetEngine(Engine):
                                 # kwargs["dataset"],
                                 ds_filters=ds_filters,
                                 columns=None,  # TODO: Gather necessary statistics
+                                schema=schema,
                                 collect_func=_collect_fragment_metadata,
                             )
                             for i in range(0, len(fragments), metadata_task_size)
@@ -1557,10 +1564,7 @@ class ArrowDatasetEngine(Engine):
                         **compute_kwargs
                     )
 
-        tT2 = time.time() - t0
-        import pdb
-
-        pdb.set_trace()
+        # tT2 = time.time() - t0
         return parts, stats, common_kwargs
 
     @classmethod
