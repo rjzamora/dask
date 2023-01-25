@@ -2,7 +2,8 @@ import itertools
 import json
 import math
 import textwrap
-import time
+
+# import time
 from collections import defaultdict
 from datetime import datetime
 
@@ -1367,7 +1368,7 @@ class ArrowDatasetEngine(Engine):
         gather_metadata = False  # bool(chunksize)
         compute_kwargs = dict(scheduler="threads" if local_gather else None)
 
-        t0 = time.time()
+        # t0 = time.time()
         if gather_metadata:
 
             by = "byte_size"  # "How" we are aggregating ("byte_size" or "num_rows")
@@ -1434,8 +1435,7 @@ class ArrowDatasetEngine(Engine):
                     )[0]
                 )
 
-            tT = time.time() - t0
-
+            # tT = time.time() - t0
             metadata_agg = (
                 pd.DataFrame(metadata_summary)
                 .groupby("path_id")
@@ -1559,7 +1559,6 @@ class ArrowDatasetEngine(Engine):
                         return parts, stats
 
                     gather_parts_dsk["final-" + name] = (_combine_parts, finalize_list)
-                    # parts, stats = Delayed("final-" + name, gather_parts_dsk).compute(scheduler="threads")
                     parts, stats = Delayed("final-" + name, gather_parts_dsk).compute(
                         **compute_kwargs
                     )
