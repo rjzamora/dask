@@ -1763,7 +1763,9 @@ class ArrowDatasetEngine(Engine):
         **kwargs,
     ) -> pd.DataFrame:
         _kwargs = kwargs.get("arrow_to_pandas", {})
-        _kwargs.update({"use_threads": False, "ignore_metadata": False})
+        for k in ["use_threads", "ignore_metadata"]:
+            if k not in _kwargs:
+                _kwargs[k] = False
 
         types_mapper = cls._determine_type_mapper(
             use_nullable_dtypes=use_nullable_dtypes,
