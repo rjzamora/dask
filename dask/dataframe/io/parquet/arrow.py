@@ -959,7 +959,7 @@ class ArrowDatasetEngine(Engine):
                     "cannot pass `partitioning` option under `dataset`"
                     "if `partitioning_options` is also specified."
                 )
-            elif not isinstance(_partitioning, ("str", "list")):
+            elif not isinstance(_partitioning, (str, list)):
                 raise ValueError(
                     f"{type(_partitioning)} not a supported type for"
                     f"`partitioning`. Please see documetnation on "
