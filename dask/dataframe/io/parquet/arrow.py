@@ -388,6 +388,20 @@ def _filters_to_expression(filters, propagate_null=False, nan_is_null=True):
     return reduce(operator.or_, disjunction_members)
 
 
+def _check_options(dataset_kwargs: dict):
+    # Simple utility to convert dict of partitioning options
+    # to a proper `Partitioning` object within a dictionary
+    # of dataset options
+    return {
+        k: (
+            pa_ds.partitioning(**v)
+            if k == "partitioning" and isinstance(v, dict)
+            else v
+        )
+        for k, v in dataset_kwargs.items()
+    }
+
+
 #
 #  ArrowDatasetEngine
 #
@@ -934,8 +948,23 @@ class ArrowDatasetEngine(Engine):
         # Extract dataset-specific options
         _dataset_kwargs = kwargs.pop("dataset", {})
 
+        # Deal with partitioning/partitioning_options
+        partitioning_options = kwargs.pop("partitioning_options", {})
         if "partitioning" not in _dataset_kwargs:
-            _dataset_kwargs["partitioning"] = "hive"
+            _dataset_kwargs["partitioning"] = partitioning_options or "hive"
+        else:
+            _partitioning = _dataset_kwargs["partitioning"]
+            if partitioning_options:
+                raise ValueError(
+                    "cannot pass `partitioning` option under `dataset`"
+                    "if `partitioning_options` is also specified."
+                )
+            elif not isinstance(_partitioning, ("str", "list")):
+                raise ValueError(
+                    f"{type(_partitioning)} not a supported type for"
+                    f"`partitioning`. Please see documetnation on "
+                    f"`partitioning_options`."
+                )
 
         if "format" not in _dataset_kwargs:
             _dataset_kwargs["format"] = pa_ds.ParquetFileFormat()
@@ -954,7 +983,7 @@ class ArrowDatasetEngine(Engine):
                 ds = pa_ds.parquet_dataset(
                     meta_path,
                     filesystem=_wrapped_fs(fs),
-                    **_dataset_kwargs,
+                    **_check_options(_dataset_kwargs),
                 )
                 has_metadata_file = True
             elif parquet_file_extension:
@@ -982,7 +1011,7 @@ class ArrowDatasetEngine(Engine):
                     ds = pa_ds.parquet_dataset(
                         meta_path,
                         filesystem=_wrapped_fs(fs),
-                        **_dataset_kwargs,
+                        **_check_options(_dataset_kwargs),
                     )
                     has_metadata_file = True
 
@@ -996,7 +1025,7 @@ class ArrowDatasetEngine(Engine):
             ds = pa_ds.dataset(
                 paths,
                 filesystem=_wrapped_fs(fs),
-                **_dataset_kwargs,
+                **_check_options(_dataset_kwargs),
             )
 
         # Get file_frag sample and extract physical_schema
@@ -1637,7 +1666,9 @@ class ArrowDatasetEngine(Engine):
 
             # Check if we have partitioning information.
             # Will only have this if the engine="pyarrow-dataset"
-            partitioning = kwargs.get("dataset", {}).get("partitioning", None)
+            partitioning = _check_options(kwargs.get("dataset", {})).get(
+                "partitioning", None
+            )
 
             # Check if we need to generate a fragment for filtering.
             # We only need to do this if we are applying filters to
