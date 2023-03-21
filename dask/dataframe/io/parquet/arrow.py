@@ -324,6 +324,25 @@ def _hive_dirname(name, val):
     return f"{name}={val}"
 
 
+def _delay_hive_partitioning(partitioning=None, **kwargs):
+    # Automatically decompose HivePartitioning object
+    # into the necessary key-word arguments for
+    # `pyarrow.dataset.partitioning`
+    if isinstance(partitioning, pa_ds.HivePartitioning):
+        schema = partitioning.schema
+        dictionaries = (
+            {name: partitioning.dictionaries[i] for i, name in enumerate(schema.names)}
+            if partitioning.dictionaries
+            else None
+        )
+        partitioning = {
+            "flavor": "hive",
+            "schema": partitioning.schema,
+            "dictionaries": dictionaries,
+        }
+    return {"partitioning": partitioning, **kwargs}
+
+
 def _apply_partitioning(partitioning=None, warn=False, **kwargs):
     # Pre-process a dict of `pyarrow.dataset.dataset`` key-word
     # arguments. Primary purpose is to convert a dictionary-based
@@ -968,6 +987,7 @@ class ArrowDatasetEngine(Engine):
             _dataset_kwargs["partitioning"] = "hive"
         if "format" not in _dataset_kwargs:
             _dataset_kwargs["format"] = pa_ds.ParquetFileFormat()
+        _dataset_kwargs = _delay_hive_partitioning(**_dataset_kwargs)
         _applied_dataset_kwargs = _apply_partitioning(warn=True, **_dataset_kwargs)
 
         # Case-dependent pyarrow.dataset creation
