@@ -4,6 +4,7 @@ import numbers
 from itertools import chain, product
 from numbers import Integral
 from operator import getitem
+from threading import RLock
 
 import numpy as np
 
@@ -1036,6 +1037,7 @@ Lazy RNG-state machinery
 """
 
 _cached_states = {}
+_cached_states_lock = RLock()
 
 
 def _make_api(attr, state_constructor=None, state_class=None):
@@ -1045,13 +1047,22 @@ def _make_api(attr, state_constructor=None, state_class=None):
     def wrapper(*args, **kwargs):
         backend = array_creation_dispatch.backend
         key = (backend, state_constructor.__name__)
-        if key not in _cached_states:
-            # Cache the default RandomState object for this backend
-            _cached_states[key] = state_constructor()
-        return getattr(
-            _cached_states[key],
-            attr,
-        )(*args, **kwargs)
+
+        with _cached_states_lock:
+            try:
+                state = _cached_states[key]
+            except KeyError:
+                state = state_constructor()
+                _cached_states[key] = state
+            return getattr(state, attr)(*args, **kwargs)
+
+        # if key not in _cached_states:
+        #     # Cache the default RandomState object for this backend
+        #     _cached_states[key] = state_constructor()
+        # return getattr(
+        #     _cached_states[key],
+        #     attr,
+        # )(*args, **kwargs)
 
     wrapper.__name__ = getattr(state_class, attr).__name__
     wrapper.__doc__ = getattr(state_class, attr).__doc__
