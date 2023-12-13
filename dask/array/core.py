@@ -1933,7 +1933,7 @@ class Array(DaskMethodsMixin):
         if np.isscalar(meta):
             meta = np.array(meta)
 
-        graph = HighLevelGraph.from_collections(out, dsk, dependencies=[self])
+        graph = HighLevelGraph.from_collections(out, dsk, dependencies=[self, value])
         y = Array(graph, out, chunks=self.chunks, dtype=self.dtype, meta=meta)
 
         self._meta = y._meta

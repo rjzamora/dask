@@ -2058,10 +2058,10 @@ def setitem_array(out_name, array, indices, value):
         v = concatenate_array_chunks(v)
         v_key = next(flatten(v.__dask_keys__()))
 
-        # Insert into the output dask dictionary the dask of the part
-        # of assignment value for this block (not minding when we
-        # overwrite any existing keys as the values will be the same).
-        dsk = merge(dict(v.dask), dsk)
+        # Avoid overwriting existing key(s) for value if they
+        # are already in `value.dask`
+        if v._name not in value.dask.layers:
+            dsk = merge(dict(v.dask), dsk)
 
         # Define the assignment function for this block.
         dsk[out_key] = (setitem, in_key, v_key, block_indices)
