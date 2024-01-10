@@ -190,7 +190,12 @@ def _groupby_raise_unaligned(df, **kwargs):
             by = [by]
         kwargs.update(by=list(by))
     with check_observed_deprecation():
-        return df.groupby(**kwargs)
+        # Attach original kwargs to the grouped object before returning.
+        # Downstream operations (e.g. _compute_sum_of_squares) may want
+        # to use this information
+        grouped = df.groupby(**kwargs)
+        grouped._grouping_kwargs = kwargs
+        return grouped
 
 
 def _groupby_slice_apply(
@@ -1210,22 +1215,16 @@ def _groupby_apply_funcs(df, *by, **kwargs):
 
 
 def _compute_sum_of_squares(grouped, column):
-    # Note: CuDF cannot use `groupby.apply`.
-    # Need to unpack groupby to compute sum of squares
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore",
-            "DataFrameGroupBy.grouper is deprecated and will be removed in a future version of pandas.",
-            FutureWarning,
-        )
-        # TODO: Avoid usage of grouper
-        if hasattr(grouped, "grouper"):
-            keys = grouped.grouper
-        else:
-            # Handle CuDF groupby object (different from pandas)
-            keys = grouped.grouping.keys
+    # Note: `groupby.apply` can be very slow (especially in cudf).
+    # Hopefully we atteched a "_grouping_kwargs" attribute, so we
+    # can perform `pow(2)` on all rows at once
+    try:
+        grouping_kwargs = grouped._grouping_kwargs
+    except AttributeError:
+        base = grouped[column] if column is not None else grouped
+        return base.apply(lambda x: (x ** 2).sum())
     df = grouped.obj[column].pow(2) if column else grouped.obj.pow(2)
-    return df.groupby(keys).sum()
+    return df.groupby(**grouping_kwargs).sum()
 
 
 def _agg_finalize(df, aggregate_funcs, finalize_funcs, level, sort=False, **kwargs):
