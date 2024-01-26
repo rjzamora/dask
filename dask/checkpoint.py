@@ -10,7 +10,7 @@ from dask.base import tokenize
 from dask.blockwise import BlockIndex
 from dask.utils import typename
 
-from distributed import wait, default_client
+from distributed import get_worker, wait, default_client
 from distributed.protocol import dask_deserialize, dask_serialize
 
 
@@ -72,6 +72,7 @@ class ParquetHandler(Handler):
     def save(cls, part, path, index):
         fn = f"{path}/part.{index[0]}.parquet"
         part.to_parquet(fn)
+        # return get_worker().worker_address
         return index[0]
 
     def load(self):
@@ -88,14 +89,14 @@ class Checkpoint:
 
     def __init__(
         self,
-        client,
+        npartitions,
         meta,
         handler,
         path,
         id,
         load_kwargs,
     ):
-        self.client = client
+        self.npartitions = npartitions
         self.meta = meta
         self.backend = typename(meta).partition(".")[0]
         self.handler = handler
@@ -109,6 +110,9 @@ class Checkpoint:
         path = self.path
         fmt = self.handler.format
         return f"Checkpoint({ctype})<path={path}, format={fmt}>"
+
+    def __del__(self):
+        self.clean()
 
     @classmethod
     def create(
@@ -144,19 +148,19 @@ class Checkpoint:
 
         wait(client.run(handler.prepare, path))
 
-        result = df.map_partitions(
-            handler.save,
-            path,
-            BlockIndex((df.npartitions,)),
-            meta=meta,
-            enforce_metadata=False,
-            **save_kwargs,
-        ).persist(**(compute_kwargs or {}))
-        wait(result)
-        del result
+        npartitions = len(
+            df.map_partitions(
+                handler.save,
+                path,
+                BlockIndex((df.npartitions,)),
+                meta=meta,
+                enforce_metadata=False,
+                **save_kwargs,
+            ).compute(**(compute_kwargs or {}))
+        )
 
         return cls(
-            client,
+            npartitions,
             meta,
             handler,
             path,
@@ -174,18 +178,25 @@ class Checkpoint:
             raise RuntimeError("This checkpoint is no longer valid")
 
         #
+        # Get client and check workers
+        #
+        client = default_client()
+
+        #
         # Find out which partition indices are stored on each worker
         #
         def get_indices(path):
             # Assume file-name is something like: <name>.<index>.<fmt>
             return {int(fn.split(".")[-2]) for fn in glob.glob(path + "/*")}
 
-        worker_indices = self.client.run(get_indices, self.path)
+        worker_indices = client.run(get_indices, self.path)
     
         summary = defaultdict(list)
         for worker, indices in worker_indices.items():
             for index in indices:
                 summary[index].append(worker)
+
+        assert len(summary) == self.npartitions, "Load failed."
 
         #
         # Convert each checkpointed partition to a `Handler` object
@@ -195,7 +206,7 @@ class Checkpoint:
         for i, (worker, indices) in enumerate(summary.items()):
             assignments[worker] = indices[i % len(indices)]
             futures.append(
-                self.client.submit(
+                client.submit(
                     self.handler,
                     self.path,
                     self.backend,
@@ -224,7 +235,8 @@ class Checkpoint:
 
     def clean(self):
         """Clean up this checkpoint"""
-        wait(self.client.run(self.handler.clean, self.path))
+        client = default_client()
+        wait(client.run(self.handler.clean, self.path))
         self._valid = False
 
 
