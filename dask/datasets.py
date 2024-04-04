@@ -55,6 +55,24 @@ def timeseries(
     ...     id_lam=1000  # control number of items in id column
     ... )
     """
+    from dask.dataframe import _dask_expr_enabled
+
+    if _dask_expr_enabled():
+        try:
+            from dask_expr.datasets import timeseries as _timeseries
+
+            return _timeseries(
+                start=start,
+                end=end,
+                freq=freq,
+                partition_freq=partition_freq,
+                dtypes=dtypes,
+                seed=seed,
+                **kwargs,
+            )
+        except ImportError:
+            pass
+
     from dask.dataframe.io.demo import make_timeseries
 
     if dtypes is None:
