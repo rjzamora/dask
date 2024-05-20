@@ -80,7 +80,7 @@ from tlz import merge, merge_sorted, take
 from dask.base import tokenize
 from dask.dataframe._compat import PANDAS_GE_150
 from dask.dataframe.core import Series
-from dask.dataframe.dispatch import tolist_dispatch
+from dask.dataframe.dispatch import is_categorical_dtype, tolist_dispatch
 from dask.dataframe.utils import is_series_like
 from dask.utils import is_cupy_type, random_state_data
 
@@ -345,9 +345,7 @@ def process_val_weights(vals_and_weights, npartitions, dtype_info):
         rv = vals
     elif len(vals) < npartitions + 1:
         # The data is under-sampled
-        if np.issubdtype(vals.dtype, np.number) and not isinstance(
-            dtype, pd.CategoricalDtype
-        ):
+        if np.issubdtype(vals.dtype, np.number) and not is_categorical_dtype(dtype):
             # Interpolate extra divisions
             q_weights = np.cumsum(weights)
             q_target = np.linspace(q_weights[0], q_weights[-1], npartitions + 1)
@@ -383,7 +381,7 @@ def process_val_weights(vals_and_weights, npartitions, dtype_info):
         rv = np.concatenate([trimmed, jumbo_vals])
         rv.sort()
 
-    if isinstance(dtype, pd.CategoricalDtype):
+    if is_categorical_dtype(dtype):
         rv = pd.Categorical.from_codes(rv, info[0], info[1])
     elif isinstance(dtype, pd.DatetimeTZDtype):
         rv = pd.DatetimeIndex(rv).tz_localize(dtype.tz)
@@ -426,7 +424,9 @@ def percentiles_summary(df, num_old, num_new, upsample, state):
     data = df
     interpolation = "linear"
 
-    if isinstance(data.dtype, pd.CategoricalDtype):
+    if is_categorical_dtype(data.dtype):
+        if hasattr(data, "to_pandas"):
+            data = data.to_pandas()
         data = data.cat.codes
         interpolation = "nearest"
     elif is_datetime64_dtype(data.dtype) or is_integer_dtype(data.dtype):
@@ -478,9 +478,8 @@ def percentiles_summary(df, num_old, num_new, upsample, state):
 
 def dtype_info(df):
     info = None
-    if isinstance(df.dtype, pd.CategoricalDtype):
-        data = df.values
-        info = (data.categories, data.ordered)
+    if is_categorical_dtype(df.dtype):
+        info = (df.cat.categories, df.cat.ordered)
     return df.dtype, info
 
 
