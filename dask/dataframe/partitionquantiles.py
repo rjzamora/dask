@@ -425,8 +425,6 @@ def percentiles_summary(df, num_old, num_new, upsample, state):
     interpolation = "linear"
 
     if is_categorical_dtype(data.dtype):
-        if hasattr(data, "to_pandas"):
-            data = data.to_pandas()
         data = data.cat.codes
         interpolation = "nearest"
     elif is_datetime64_dtype(data.dtype) or is_integer_dtype(data.dtype):
@@ -464,7 +462,7 @@ def percentiles_summary(df, num_old, num_new, upsample, state):
             pass
 
     if (
-        is_cupy_type(data)
+        is_cupy_type(vals)
         and interpolation == "linear"
         and np.issubdtype(data.dtype, np.integer)
     ):
