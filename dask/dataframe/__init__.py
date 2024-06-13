@@ -10,13 +10,31 @@ def _dask_expr_enabled() -> bool:
     import pandas as pd
 
     import dask
+    from dask.config import _dataframe_query_planning
+
+    def _raise(new, old):
+        old_repr = "enabled" if old else "disabled"
+        raise ValueError(
+            f"The 'dataframe.query-planning' config is now set to {new}, "
+            "but `dask.dataframe` was first imported with query planning "
+            f"{old_repr}. Please make sure the query-planning config is "
+            "only set before `dask.dataframe` is first imported!"
+        )
 
     use_dask_expr = dask.config.get("dataframe.query-planning")
+    if use_dask_expr is True and _dataframe_query_planning is False:
+        _raise(use_dask_expr, _dataframe_query_planning)
+    elif use_dask_expr is False and _dataframe_query_planning is True:
+        _raise(use_dask_expr, _dataframe_query_planning)
+    elif _dataframe_query_planning is not None:
+        return _dataframe_query_planning
+
     if (
         use_dask_expr is False
         or use_dask_expr is None
         and Version(pd.__version__).major < 2
     ):
+        _dataframe_query_planning = False
         return False
     try:
         import dask_expr  # noqa: F401
@@ -29,9 +47,11 @@ This will raise in a future version.
 """
         if use_dask_expr is None:
             warnings.warn(msg, FutureWarning)
+            _dataframe_query_planning = False
             return False
         else:
             raise ImportError(msg)
+    _dataframe_query_planning = True
     return True
 
 

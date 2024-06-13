@@ -17,6 +17,8 @@ import yaml
 
 from dask.typing import no_default
 
+_dataframe_query_planning: None | bool = None  # noqa: F401
+
 
 def _get_paths():
     """Get locations to search for YAML configuration files.
