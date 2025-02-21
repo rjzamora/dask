@@ -287,15 +287,12 @@ def sorted_division_locations(seq, npartitions=None, chunksize=None):
 
     # Convert from an ndarray to a plain list so that
     # any divisions we extract from seq are plain Python scalars.
+    # We also convert seq_unique, because it might be a cudf.Series.
     seq = tolist(seq)
+    seq_unique = tolist(seq_unique)
 
     if duplicates:
-        offsets = (
-            # Avoid numpy conversion (necessary for dask-cudf)
-            seq.searchsorted(seq_unique, side="left")
-            if hasattr(seq, "searchsorted")
-            else np.array(seq).searchsorted(seq_unique, side="left")
-        )
+        offsets = np.array(seq).searchsorted(seq_unique, side="left")
         enforce_exact = npartitions and len(offsets) >= npartitions
     else:
         offsets = seq_unique = None
@@ -330,9 +327,8 @@ def sorted_division_locations(seq, npartitions=None, chunksize=None):
         # pos is the position of the first occurrence of
         # div (which is i when seq has no duplicates)
         if duplicates:
-            # Note: cupy requires casts to `int` below
             if ind is None:
-                ind = int((seq_unique == seq[i]).nonzero()[0][0])
+                ind = seq_unique.index(seq[i])
             if enforce_exact:
                 # Avoid "over-stepping" too many unique
                 # values when npartitions is approximately
